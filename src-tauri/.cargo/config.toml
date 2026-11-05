@@ -1,0 +1,10 @@
+# OpenDiff 项目级 Cargo 配置：使用 rsproxy 镜像加速 crates.io 访问
+# 仅对本仓库生效，不影响全局配置
+[source.crates-io]
+replace-with = 'rsproxy-sparse'
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[net]
+git-fetch-with-cli = true

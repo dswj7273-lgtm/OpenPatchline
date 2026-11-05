@@ -1,0 +1,463 @@
+/*
+ * Diff 视图样式 — docs/06 §4。
+ * 颜色 / 字体变量来自 theme.css；tok-* 颜色在 tokens.css。
+ * 行高固定 20px（--code-line-height），与 SplitDiffGrid 的 ROW_H
+ * 常量保持一致，虚拟滚动依赖该值做精确计算。
+ */
+
+/* ---------- 骨架 ---------- */
+
+.diff-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--surface-1);
+}
+
+.diff-view--empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.diff-view__placeholder {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-md, 14px);
+  user-select: none;
+}
+
+/* 主体区（body 内的占位提示居中） */
+.diff-view__body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.diff-view__body .diff-view__placeholder {
+  margin: auto;
+}
+
+.diff-view__banner {
+  padding: 4px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--text-xs, 11px);
+}
+
+/* ---------- 顶栏 ---------- */
+
+.diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 46px;
+  padding: 8px 14px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-header__left,
+.diff-header__right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.diff-header__left {
+  flex: 1 1 auto;
+}
+
+.diff-header__right {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.diff-header__btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.diff-header__btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.diff-header__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.diff-header__path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-code);
+  font-size: var(--text-sm, 12px);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.diff-header__stats {
+  display: inline-flex;
+  flex: none;
+  gap: 8px;
+  font-family: var(--font-code);
+  font-size: var(--text-sm, 12px);
+  white-space: nowrap;
+}
+
+.diff-header__stat-add {
+  color: var(--color-success, var(--accent));
+}
+
+.diff-header__stat-remove {
+  color: var(--color-danger, #e06c75);
+}
+
+.diff-header__changes {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: var(--text-sm, 12px);
+  white-space: nowrap;
+}
+
+.diff-header__loading {
+  color: var(--text-muted);
+  font-size: var(--text-xs, 11px);
+  animation: diff-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes diff-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.diff-header__mode {
+  display: inline-flex;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.diff-header__mode button {
+  flex: none;
+  min-height: 26px;
+  white-space: nowrap;
+  padding: 3px 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs, 11px);
+  cursor: pointer;
+}
+
+.diff-header__mode button.is-active {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+@media (max-width: 1000px) {
+  .diff-header__stats {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .diff-header {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .diff-header__left {
+    flex: 1 1 100%;
+  }
+
+  .diff-header__right {
+    margin-left: auto;
+  }
+}
+
+/* ---------- 文件下拉列表 ---------- */
+
+.diff-file-list {
+  position: relative;
+  flex: none;
+}
+
+.diff-file-list__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-sm, 12px);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.diff-file-list__trigger:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.diff-file-list__chevron {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.diff-file-list__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  min-width: 320px;
+  max-width: 480px;
+  max-height: 320px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.diff-file-list__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-sm, 12px);
+  text-align: left;
+  cursor: pointer;
+}
+
+.diff-file-list__item:hover,
+.diff-file-list__item.is-current {
+  background: var(--surface-3);
+  color: var(--text-primary);
+}
+
+.diff-file-list__badge {
+  flex: none;
+  width: 18px;
+  font-family: var(--font-code);
+  font-size: var(--text-xs, 11px);
+  text-align: center;
+}
+
+.diff-file-list__badge--modified {
+  color: var(--color-warning, var(--text-secondary));
+}
+
+.diff-file-list__badge--added {
+  color: var(--color-success, var(--accent));
+}
+
+.diff-file-list__badge--deleted {
+  color: var(--color-danger, #e06c75);
+}
+
+.diff-file-list__badge--renamed {
+  color: var(--color-info, var(--accent));
+}
+
+.diff-file-list__badge--binary,
+.diff-file-list__badge--untracked {
+  color: var(--text-muted);
+}
+
+.diff-file-list__path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-code);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.diff-file-list__stats {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  font-family: var(--font-code);
+  font-size: var(--text-xs, 11px);
+}
+
+/* ---------- 虚拟滚动网格（分栏 + 统一共用） ---------- */
+
+.diff-grid {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  background: var(--surface-1);
+  font-family: var(--font-code);
+  font-size: var(--code-size, 13px);
+  line-height: 20px;
+}
+
+.diff-grid__sizer {
+  position: relative;
+  width: 100%;
+}
+
+/* 分栏行：左右两格 */
+.diff-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: grid;
+  height: 20px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.diff-cell {
+  display: grid;
+  height: 100%;
+  min-width: 0;
+  grid-template-columns: 48px 1fr;
+}
+
+/* 右栏左缘的中缝分隔线（box-shadow 不影响布局宽度） */
+.diff-cell--new {
+  box-shadow: inset 1px 0 0 var(--border);
+}
+
+.diff-cell__gutter {
+  box-sizing: border-box;
+  padding-right: 8px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+
+.diff-cell--removed .diff-cell__gutter,
+.diff-cell--added .diff-cell__gutter {
+  color: var(--text-secondary);
+}
+
+.diff-cell__content {
+  padding: 0 8px 0 4px;
+  overflow: hidden;
+  color: var(--text-primary);
+  /* code 元素默认 monospace 字体需覆盖为继承 */
+  font-family: inherit;
+  white-space: pre;
+}
+
+/* 删除 / 新增 / 修改对着色 */
+.diff-cell--removed {
+  background: var(--diff-remove-bg);
+}
+
+.diff-cell--added {
+  background: var(--diff-add-bg);
+}
+
+/* spacer 占位格：底色 + 细斜纹 */
+.diff-cell--spacer {
+  background-color: var(--diff-spacer-bg);
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 6px,
+    rgba(255, 255, 255, 0.035) 6px,
+    rgba(255, 255, 255, 0.035) 7px
+  );
+}
+
+/* 字符级差异 */
+.char-add {
+  background: var(--diff-add-inline);
+  border-radius: 1px;
+}
+
+.char-remove {
+  background: var(--diff-remove-inline);
+  border-radius: 1px;
+}
+
+/* 统一行：旧行号 | 新行号 | 内容 */
+.u-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: grid;
+  height: 20px;
+  grid-template-columns: 48px 48px 1fr;
+}
+
+.u-gutter {
+  box-sizing: border-box;
+  padding-right: 8px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+
+.u-row--removed {
+  background: var(--diff-remove-bg);
+}
+
+.u-row--added {
+  background: var(--diff-add-bg);
+}
+
+.u-row--removed .u-gutter,
+.u-row--added .u-gutter {
+  color: var(--text-secondary);
+}
+
+/* 滚动条 */
+.diff-grid::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.diff-grid::-webkit-scrollbar-thumb {
+  border-radius: 5px;
+  background: var(--surface-3);
+}
+
+.diff-grid::-webkit-scrollbar-track {
+  background: transparent;
+}

@@ -1,0 +1,506 @@
+/* 左侧工作区：仓库上下文、目录树与提交操作。 */
+.sidebar {
+  width: clamp(264px, 22vw, 320px);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-1);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.sidebar-section {
+  padding: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* ---- 仓库与当前分支 ---- */
+.sidebar-workspace {
+  padding: 18px 14px 14px;
+}
+
+.sidebar-repo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin-bottom: 14px;
+  padding-inline: 2px;
+}
+
+.sidebar-repo-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-repo-kicker {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+}
+
+.sidebar-repo-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-branch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-0);
+  color: var(--text-secondary);
+  box-shadow: inset 0 1px 0 var(--highlight);
+}
+
+.sidebar-branch-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--accent);
+}
+
+.sidebar-branch-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-code);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-branch-label {
+  flex: none;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  line-height: 14px;
+}
+
+/* ---- 变更分组 ---- */
+.sidebar-changes {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 14px 8px 12px;
+  border-bottom: none;
+}
+
+.sidebar-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  margin: 0 6px 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.025em;
+}
+
+.sidebar-heading-count,
+.sidebar-group-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 19px;
+  height: 18px;
+  padding-inline: 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 550;
+  line-height: 1;
+}
+
+.sidebar-heading .sidebar-refresh {
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  border-radius: 6px;
+}
+
+.sidebar-refresh svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 180ms ease;
+}
+
+.sidebar-refresh:hover svg {
+  transform: rotate(35deg);
+}
+
+.sidebar-groups {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 1px 8px;
+  scrollbar-color: var(--surface-3) transparent;
+  scrollbar-width: thin;
+}
+
+.sidebar-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 4px;
+}
+
+.sidebar-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 550;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.sidebar-group-header:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.sidebar-caret {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--text-muted);
+  transition: transform 140ms ease;
+}
+
+.sidebar-caret.is-open {
+  transform: rotate(90deg);
+}
+
+.sidebar-group-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-group-count {
+  height: 17px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.sidebar-group-empty {
+  margin: 2px 0 4px;
+  padding: 5px 26px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* ---- 文件与目录行 ---- */
+.sidebar-file,
+.sidebar-dir {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 30px;
+  border-radius: 6px;
+  transition: background 100ms ease;
+}
+
+.sidebar-file:hover,
+.sidebar-dir:hover {
+  background: var(--surface-2);
+}
+
+/* 文件类型同时驱动状态字母与文件名；暂存状态由所在分组表达。 */
+.sidebar-file--modified {
+  --file-status-color: var(--color-warning);
+}
+
+.sidebar-file--added {
+  --file-status-color: var(--color-success);
+}
+
+.sidebar-file--untracked {
+  --file-status-color: var(--color-untracked);
+}
+
+.sidebar-file--deleted {
+  --file-status-color: var(--color-danger);
+}
+
+.sidebar-file--renamed {
+  --file-status-color: var(--color-renamed);
+}
+
+.sidebar-file--binary {
+  --file-status-color: var(--text-secondary);
+}
+
+.sidebar-file-open,
+.sidebar-dir-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  min-height: 30px;
+  padding: 3px 5px 3px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-file-open:focus-visible,
+.sidebar-dir-toggle:focus-visible {
+  outline-offset: -2px;
+}
+
+.sidebar-file-path {
+  display: flex;
+  align-items: baseline;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.sidebar-file-status {
+  width: 12px;
+  flex: none;
+  color: var(--file-status-color, var(--text-muted));
+  font-family: var(--font-code);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* 目录部分从头部截断（省略号在左），文件名完整可见。 */
+.sidebar-file-dir {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  direction: rtl;
+  text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  white-space: nowrap;
+}
+
+.sidebar-file-base {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--file-status-color, var(--text-primary));
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-dir-toggle {
+  gap: 6px;
+}
+
+.sidebar-dir-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-dir-count {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-stage-btn {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  margin-right: 4px;
+  border-radius: 5px;
+  opacity: 0;
+  transition: opacity 100ms ease, background 100ms ease;
+}
+
+.sidebar-stage-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.sidebar-file:hover .sidebar-stage-btn,
+.sidebar-file:focus-within .sidebar-stage-btn,
+.sidebar-dir:hover .sidebar-stage-btn,
+.sidebar-dir:focus-within .sidebar-stage-btn {
+  opacity: 1;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-stage-btn {
+    opacity: 0.75;
+  }
+}
+
+/* ---- 提交区 ---- */
+.sidebar-commit {
+  display: flex;
+  flex-direction: column;
+  margin: 8px 6px 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sidebar-commit-input {
+  min-height: 78px;
+  max-height: 180px;
+  resize: vertical;
+  padding: 10px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  outline: none;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  box-shadow: inset 0 1px 0 var(--highlight);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.55;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.sidebar-commit-input:hover {
+  border-color: var(--border);
+}
+
+.sidebar-commit-input:focus {
+  border-color: color-mix(in oklch, var(--accent) 65%, var(--border));
+  background: var(--surface-1);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.sidebar-commit-input::placeholder {
+  color: var(--text-muted);
+}
+
+.sidebar-commit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.sidebar-commit-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.sidebar-commit-meta kbd {
+  padding: 2px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 9px;
+  line-height: 1.2;
+}
+
+.sidebar-commit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 76px;
+  height: 30px;
+  border-radius: 7px;
+  font-weight: 650;
+}
+
+.sidebar-commit-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-caret,
+  .sidebar-refresh svg,
+  .sidebar-stage-btn {
+    transition: none;
+  }
+
+  .sidebar-refresh:hover svg {
+    transform: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .sidebar {
+    width: 230px;
+  }
+}
+
+@media (max-width: 560px) {
+  .sidebar {
+    width: 205px;
+  }
+
+  .sidebar-workspace {
+    padding-inline: 10px;
+  }
+
+  .sidebar-commit-meta kbd {
+    display: none;
+  }
+}

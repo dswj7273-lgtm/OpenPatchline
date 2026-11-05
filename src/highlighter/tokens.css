@@ -1,0 +1,52 @@
+/*
+ * 语法 token 颜色（深色主题）— docs/05 §10 / docs/06 §5。
+ * 只定义 tok-* 类；基础色板（--text-*）来自 theme.css。
+ * 浅色主题后续按 :root[data-theme="light"] 覆盖。
+ * 色值取 One Dark 系，保证在 --diff-add-bg / --diff-remove-bg
+ * 的着色行背景上仍可读。
+ */
+
+.tok-kw {
+  color: #c678dd;
+}
+
+.tok-str {
+  color: #98c379;
+}
+
+.tok-num {
+  color: #d19a66;
+}
+
+.tok-com {
+  color: #7f848e;
+  font-style: italic;
+}
+
+.tok-fn {
+  color: #61afef;
+}
+
+.tok-type {
+  color: #e5c07b;
+}
+
+.tok-var {
+  color: var(--text-primary);
+}
+
+.tok-op {
+  color: #56b6c2;
+}
+
+.tok-punct {
+  color: #828997;
+}
+
+.tok-atom {
+  color: #d19a66;
+}
+
+.tok-prop {
+  color: #e06c75;
+}

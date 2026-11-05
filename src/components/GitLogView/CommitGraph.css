@@ -1,0 +1,7 @@
+/* 提交图 canvas：位于行内容之下，只覆盖 90px 图形列。 */
+.commit-graph-canvas {
+  position: absolute;
+  left: 0;
+  z-index: 0;
+  pointer-events: none;
+}
