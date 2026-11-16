@@ -157,9 +157,7 @@ export function tokenizeDetailed(content: string, langId: string): TokenizeResul
     doc = content.slice(0, totalStarts[MAX_LINES]);
     if (!warnedTooManyLines) {
       warnedTooManyLines = true;
-      console.warn(
-        `[openpatchline] 文件超过 ${MAX_LINES} 行，仅对前 ${MAX_LINES} 行做语法高亮`,
-      );
+      console.warn(`[openpatchline] 文件超过 ${MAX_LINES} 行，仅对前 ${MAX_LINES} 行做语法高亮`);
     }
   }
 

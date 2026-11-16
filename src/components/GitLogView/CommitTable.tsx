@@ -48,12 +48,12 @@ function refBadgeClass(kind: RefLabel["kind"]): string {
 }
 
 export function CommitTable() {
-  const rows = useAppStore(s => s.graphRows);
-  const selectedCommitId = useAppStore(s => s.selectedCommitId);
-  const selectCommit = useAppStore(s => s.selectCommit);
-  const loadMoreCommits = useAppStore(s => s.loadMoreCommits);
-  const hasMore = useAppStore(s => s.hasMore);
-  const graphLoading = useAppStore(s => s.graphLoading);
+  const rows = useAppStore((s) => s.graphRows);
+  const selectedCommitId = useAppStore((s) => s.selectedCommitId);
+  const selectCommit = useAppStore((s) => s.selectCommit);
+  const loadMoreCommits = useAppStore((s) => s.loadMoreCommits);
+  const hasMore = useAppStore((s) => s.hasMore);
+  const graphLoading = useAppStore((s) => s.graphLoading);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -145,7 +145,7 @@ export function CommitTable() {
                 <div className="ct-msg" role="gridcell" title={row.commit.message}>
                   <span className="ct-hash">{row.commit.shortId}</span>
                   <span className="ct-msg-text">{row.commit.message}</span>
-                  {row.commit.refs.map(ref => (
+                  {row.commit.refs.map((ref) => (
                     <span key={`${ref.kind}:${ref.name}`} className={refBadgeClass(ref.kind)}>
                       {ref.name}
                     </span>
@@ -154,7 +154,11 @@ export function CommitTable() {
                 <span className="ct-author" role="gridcell" title={row.commit.authorName}>
                   {row.commit.authorName}
                 </span>
-                <span className="ct-date" role="gridcell" title={formatAbsolute(row.commit.timestamp)}>
+                <span
+                  className="ct-date"
+                  role="gridcell"
+                  title={formatAbsolute(row.commit.timestamp)}
+                >
                   {formatRelative(row.commit.timestamp)}
                 </span>
               </div>
@@ -162,7 +166,9 @@ export function CommitTable() {
           ))}
         </div>
         {rows.length === 0 && (
-          <div className="commit-table-empty">{graphLoading ? "加载提交历史…" : "暂无匹配的提交"}</div>
+          <div className="commit-table-empty">
+            {graphLoading ? "加载提交历史…" : "暂无匹配的提交"}
+          </div>
         )}
       </div>
     </section>

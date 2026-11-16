@@ -109,7 +109,9 @@
   box-shadow: inset 0 1px 0 var(--highlight);
   font-family: var(--font-ui);
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
 }
 
 .sidebar-branch:hover,
@@ -185,7 +187,10 @@
   border: 1px solid var(--border-subtle);
   border-radius: 7px;
   background: color-mix(in oklch, var(--surface-2) 45%, var(--surface-0));
-  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .sidebar-branch-create:focus-within {
@@ -232,7 +237,10 @@
   border-radius: 7px;
   background: color-mix(in oklch, var(--surface-2) 55%, var(--surface-0));
   color: var(--text-muted);
-  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .sidebar-branch-search:focus-within {
@@ -367,7 +375,9 @@
   font-size: 11.5px;
   cursor: pointer;
   text-align: left;
-  transition: background 100ms ease, color 100ms ease;
+  transition:
+    background 100ms ease,
+    color 100ms ease;
 }
 
 .sidebar-branch-item:hover:not(:disabled) {
@@ -555,7 +565,9 @@
   margin-right: 3px;
   flex: none;
   opacity: 0;
-  transition: opacity 100ms ease, background 100ms ease;
+  transition:
+    opacity 100ms ease,
+    background 100ms ease;
 }
 
 .sidebar-group-batch svg {
@@ -767,7 +779,10 @@
   margin-right: 4px;
   border-radius: 5px;
   opacity: 0;
-  transition: opacity 100ms ease, background 100ms ease, color 100ms ease;
+  transition:
+    opacity 100ms ease,
+    background 100ms ease,
+    color 100ms ease;
 }
 
 .sidebar-discard-btn {
@@ -814,7 +829,9 @@
   border-radius: 10px;
   background: var(--surface-0);
   box-shadow: inset 0 1px 0 var(--highlight);
-  transition: border-color 140ms ease, box-shadow 140ms ease;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .sidebar-commit-card:focus-within {

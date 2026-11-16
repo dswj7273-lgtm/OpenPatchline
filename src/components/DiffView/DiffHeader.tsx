@@ -45,7 +45,9 @@ const ALT_KEY = IS_MAC ? "⌥" : "Alt";
 
 /** 派发跳转变更事件（SplitDiffGrid / UnifiedGrid 监听并滚动）。 */
 function gotoChange(direction: GotoChangeDetail["direction"]) {
-  window.dispatchEvent(new CustomEvent<GotoChangeDetail>(GOTO_CHANGE_EVENT, { detail: { direction } }));
+  window.dispatchEvent(
+    new CustomEvent<GotoChangeDetail>(GOTO_CHANGE_EVENT, { detail: { direction } }),
+  );
 }
 
 function splitPath(path: string): { dir: string; base: string } {
@@ -70,7 +72,7 @@ export default function DiffHeader({
 }: DiffHeaderProps) {
   const { oldPath, newPath } = diff;
   const isRenamed = Boolean(oldPath && newPath && oldPath !== newPath);
-  const displayPath = isRenamed ? `${oldPath} → ${newPath}` : newPath ?? oldPath ?? "";
+  const displayPath = isRenamed ? `${oldPath} → ${newPath}` : (newPath ?? oldPath ?? "");
   const { dir, base } = splitPath(newPath ?? oldPath ?? "");
   const changeCount = diff.changeRowIndices.length;
 
@@ -116,8 +118,12 @@ export default function DiffHeader({
           className="diff-header__stats"
           aria-label={`新增 ${diff.additions} 行，删除 ${diff.deletions} 行`}
         >
-          <span className="diff-header__stat-pill diff-header__stat-pill--add">+{diff.additions}</span>
-          <span className="diff-header__stat-pill diff-header__stat-pill--remove">−{diff.deletions}</span>
+          <span className="diff-header__stat-pill diff-header__stat-pill--add">
+            +{diff.additions}
+          </span>
+          <span className="diff-header__stat-pill diff-header__stat-pill--remove">
+            −{diff.deletions}
+          </span>
         </span>
       </div>
 
@@ -164,7 +170,12 @@ export default function DiffHeader({
           </button>
         )}
 
-        <div className="diff-header__mode" role="group" aria-label="视图模式" title={`切换视图模式 (${MODE_SHORTCUT})`}>
+        <div
+          className="diff-header__mode"
+          role="group"
+          aria-label="视图模式"
+          title={`切换视图模式 (${MODE_SHORTCUT})`}
+        >
           <button
             type="button"
             className={mode === "split" ? "is-active" : ""}

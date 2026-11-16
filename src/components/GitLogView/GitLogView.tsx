@@ -53,31 +53,31 @@ function GitCommandCenter({
   onTabChange: (tab: CommandTab) => void;
   onClose: () => void;
 }) {
-  const repo = useAppStore(s => s.repo);
-  const branches = useAppStore(s => s.branches);
-  const stashes = useAppStore(s => s.stashes);
-  const fileStatus = useAppStore(s => s.fileStatus);
-  const gitBusy = useAppStore(s => s.gitBusy);
+  const repo = useAppStore((s) => s.repo);
+  const branches = useAppStore((s) => s.branches);
+  const stashes = useAppStore((s) => s.stashes);
+  const fileStatus = useAppStore((s) => s.fileStatus);
+  const gitBusy = useAppStore((s) => s.gitBusy);
 
-  const fetchRemote = useAppStore(s => s.fetchRemote);
-  const fetchAll = useAppStore(s => s.fetchAll);
-  const pullRepo = useAppStore(s => s.pullRepo);
-  const pullRebase = useAppStore(s => s.pullRebase);
-  const pushRepo = useAppStore(s => s.pushRepo);
-  const pushForceWithLease = useAppStore(s => s.pushForceWithLease);
-  const pushTags = useAppStore(s => s.pushTags);
+  const fetchRemote = useAppStore((s) => s.fetchRemote);
+  const fetchAll = useAppStore((s) => s.fetchAll);
+  const pullRepo = useAppStore((s) => s.pullRepo);
+  const pullRebase = useAppStore((s) => s.pullRebase);
+  const pushRepo = useAppStore((s) => s.pushRepo);
+  const pushForceWithLease = useAppStore((s) => s.pushForceWithLease);
+  const pushTags = useAppStore((s) => s.pushTags);
 
-  const createBranch = useAppStore(s => s.createBranch);
-  const createTag = useAppStore(s => s.createTag);
-  const mergeBranch = useAppStore(s => s.mergeBranch);
+  const createBranch = useAppStore((s) => s.createBranch);
+  const createTag = useAppStore((s) => s.createTag);
+  const mergeBranch = useAppStore((s) => s.mergeBranch);
 
-  const stashPush = useAppStore(s => s.stashPush);
-  const stashApply = useAppStore(s => s.stashApply);
-  const stashDrop = useAppStore(s => s.stashDrop);
-  const loadStashes = useAppStore(s => s.loadStashes);
+  const stashPush = useAppStore((s) => s.stashPush);
+  const stashApply = useAppStore((s) => s.stashApply);
+  const stashDrop = useAppStore((s) => s.stashDrop);
+  const loadStashes = useAppStore((s) => s.loadStashes);
 
-  const resetHead = useAppStore(s => s.resetHead);
-  const discardAllChanges = useAppStore(s => s.discardAllChanges);
+  const resetHead = useAppStore((s) => s.resetHead);
+  const discardAllChanges = useAppStore((s) => s.discardAllChanges);
 
   const [newBranchName, setNewBranchName] = useState("");
   const [newTagName, setNewTagName] = useState("");
@@ -85,13 +85,10 @@ function GitCommandCenter({
   const [stashMessage, setStashMessage] = useState("");
   const [confirmDiscardAll, setConfirmDiscardAll] = useState(false);
 
-  const mergeCandidates = useMemo(
-    () => branches.filter(b => !b.isCurrent),
-    [branches],
-  );
+  const mergeCandidates = useMemo(() => branches.filter((b) => !b.isCurrent), [branches]);
 
   useEffect(() => {
-    if (mergeCandidates.length > 0 && !mergeCandidates.some(b => b.name === mergeTarget)) {
+    if (mergeCandidates.length > 0 && !mergeCandidates.some((b) => b.name === mergeTarget)) {
       setMergeTarget(mergeCandidates[0].name);
     } else if (mergeCandidates.length === 0) {
       setMergeTarget("");
@@ -148,7 +145,7 @@ function GitCommandCenter({
   return (
     <div className="gitlog-cmd-popover" role="dialog" aria-label="Git 命令中心">
       <div className="gitlog-cmd-tabs" role="tablist">
-        {tabs.map(t => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
@@ -268,8 +265,8 @@ function GitCommandCenter({
                   placeholder="例如 feat/dark-graph"
                   value={newBranchName}
                   disabled={busy}
-                  onChange={e => setNewBranchName(e.target.value)}
-                  onKeyDown={e => {
+                  onChange={(e) => setNewBranchName(e.target.value)}
+                  onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
                       void onCreateBranch();
@@ -299,8 +296,8 @@ function GitCommandCenter({
                   placeholder="例如 v0.2.0"
                   value={newTagName}
                   disabled={busy}
-                  onChange={e => setNewTagName(e.target.value)}
-                  onKeyDown={e => {
+                  onChange={(e) => setNewTagName(e.target.value)}
+                  onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
                       void onCreateTag();
@@ -328,12 +325,12 @@ function GitCommandCenter({
                   className="input gitlog-cmd-input"
                   value={mergeTarget}
                   disabled={busy || mergeCandidates.length === 0}
-                  onChange={e => setMergeTarget(e.target.value)}
+                  onChange={(e) => setMergeTarget(e.target.value)}
                 >
                   {mergeCandidates.length === 0 ? (
                     <option value="">暂无其他分支可合并</option>
                   ) : (
-                    mergeCandidates.map(b => (
+                    mergeCandidates.map((b) => (
                       <option key={`${b.kind}:${b.name}`} value={b.name}>
                         {b.kind === "remote" ? `[远程] ${b.name}` : b.name}
                       </option>
@@ -365,8 +362,8 @@ function GitCommandCenter({
                   aria-label="贮藏备注"
                   value={stashMessage}
                   disabled={busy}
-                  onChange={e => setStashMessage(e.target.value)}
-                  onKeyDown={e => {
+                  onChange={(e) => setStashMessage(e.target.value)}
+                  onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
                       void onStashPush();
@@ -398,7 +395,7 @@ function GitCommandCenter({
               {stashes.length === 0 ? (
                 <div className="gitlog-cmd-empty">当前没有贮藏条目</div>
               ) : (
-                stashes.map(entry => (
+                stashes.map((entry) => (
                   <div key={entry.index} className="gitlog-stash-item">
                     <div className="gitlog-stash-copy">
                       <div className="gitlog-stash-top">
@@ -523,17 +520,17 @@ function GitCommandCenter({
 }
 
 export function GitLogView() {
-  const logFilter = useAppStore(s => s.logFilter);
-  const setLogFilter = useAppStore(s => s.setLogFilter);
-  const selectedCommitId = useAppStore(s => s.selectedCommitId);
-  const graphLoading = useAppStore(s => s.graphLoading);
-  const graphRows = useAppStore(s => s.graphRows);
-  const branches = useAppStore(s => s.branches);
-  const stashes = useAppStore(s => s.stashes);
-  const gitBusy = useAppStore(s => s.gitBusy);
-  const fetchRemote = useAppStore(s => s.fetchRemote);
-  const pullRepo = useAppStore(s => s.pullRepo);
-  const pushRepo = useAppStore(s => s.pushRepo);
+  const logFilter = useAppStore((s) => s.logFilter);
+  const setLogFilter = useAppStore((s) => s.setLogFilter);
+  const selectedCommitId = useAppStore((s) => s.selectedCommitId);
+  const graphLoading = useAppStore((s) => s.graphLoading);
+  const graphRows = useAppStore((s) => s.graphRows);
+  const branches = useAppStore((s) => s.branches);
+  const stashes = useAppStore((s) => s.stashes);
+  const gitBusy = useAppStore((s) => s.gitBusy);
+  const fetchRemote = useAppStore((s) => s.fetchRemote);
+  const pullRepo = useAppStore((s) => s.pullRepo);
+  const pushRepo = useAppStore((s) => s.pushRepo);
 
   const [search, setSearch] = useState("");
   const [author, setAuthor] = useState("");
@@ -605,10 +602,7 @@ export function GitLogView() {
     };
   }, [popoverOpen, cmdOpen]);
 
-  const currentBranch = useMemo(
-    () => branches.find(b => b.isCurrent) ?? null,
-    [branches],
-  );
+  const currentBranch = useMemo(() => branches.find((b) => b.isCurrent) ?? null, [branches]);
   const aheadCount = currentBranch?.ahead ?? 0;
   const behindCount = currentBranch?.behind ?? 0;
 
@@ -623,15 +617,15 @@ export function GitLogView() {
   };
 
   const branchSuggestions = useMemo<SuggestionItem[]>(() => {
-    const locals = branches.filter(b => b.kind === "local");
-    const remotes = branches.filter(b => b.kind === "remote");
+    const locals = branches.filter((b) => b.kind === "local");
+    const remotes = branches.filter((b) => b.kind === "remote");
     return [
-      ...locals.map(b => ({
+      ...locals.map((b) => ({
         value: b.name,
         label: b.name,
         meta: b.isCurrent ? "当前" : "本地",
       })),
-      ...remotes.map(b => ({
+      ...remotes.map((b) => ({
         value: b.name,
         label: b.name,
         meta: "远程",
@@ -658,7 +652,7 @@ export function GitLogView() {
   const activeList = useMemo(() => {
     const source = popoverTab === "author" ? authorSuggestions : branchSuggestions;
     return source
-      .filter(item => !activeQuery || item.label.toLowerCase().includes(activeQuery))
+      .filter((item) => !activeQuery || item.label.toLowerCase().includes(activeQuery))
       .slice(0, 30);
   }, [popoverTab, authorSuggestions, branchSuggestions, activeQuery]);
 
@@ -668,9 +662,9 @@ export function GitLogView() {
 
   const selectSuggestion = (item: SuggestionItem) => {
     if (popoverTab === "author") {
-      setAuthor(prev => (prev === item.value ? "" : item.value));
+      setAuthor((prev) => (prev === item.value ? "" : item.value));
     } else {
-      setBranch(prev => (prev === item.value ? "" : item.value));
+      setBranch((prev) => (prev === item.value ? "" : item.value));
     }
     if (isPrefixCommand) {
       setSearch("");
@@ -734,7 +728,7 @@ export function GitLogView() {
                 type="button"
                 className="gitlog-token-remove"
                 aria-label="移除作者过滤"
-                onClick={e => {
+                onClick={(e) => {
                   e.stopPropagation();
                   setAuthor("");
                   searchInputRef.current?.focus();
@@ -755,7 +749,7 @@ export function GitLogView() {
                 type="button"
                 className="gitlog-token-remove"
                 aria-label="移除分支过滤"
-                onClick={e => {
+                onClick={(e) => {
                   e.stopPropagation();
                   setBranch("");
                   searchInputRef.current?.focus();
@@ -771,9 +765,7 @@ export function GitLogView() {
             type="search"
             className="gitlog-omnibar-input"
             placeholder={
-              author || branch
-                ? "继续输入关键词…"
-                : "搜索提交、哈希，或输入 @作者  #分支…"
+              author || branch ? "继续输入关键词…" : "搜索提交、哈希，或输入 @作者  #分支…"
             }
             aria-label="搜索提交历史"
             aria-keyshortcuts="Meta+F Control+F"
@@ -781,17 +773,17 @@ export function GitLogView() {
             autoComplete="off"
             spellCheck={false}
             value={search}
-            onChange={e => handleInputChange(e.target.value)}
-            onKeyDown={e => {
+            onChange={(e) => handleInputChange(e.target.value)}
+            onKeyDown={(e) => {
               if (popoverOpen) {
                 if (e.key === "ArrowDown") {
                   e.preventDefault();
-                  setActiveIndex(i => (activeList.length > 0 ? (i + 1) % activeList.length : 0));
+                  setActiveIndex((i) => (activeList.length > 0 ? (i + 1) % activeList.length : 0));
                   return;
                 }
                 if (e.key === "ArrowUp") {
                   e.preventDefault();
-                  setActiveIndex(i =>
+                  setActiveIndex((i) =>
                     activeList.length > 0 ? (i - 1 + activeList.length) % activeList.length : 0,
                   );
                   return;
@@ -836,7 +828,7 @@ export function GitLogView() {
             }}
           />
 
-          <div className="gitlog-omnibar-tools" onClick={e => e.stopPropagation()}>
+          <div className="gitlog-omnibar-tools" onClick={(e) => e.stopPropagation()}>
             <button
               type="button"
               className={`gitlog-omni-tool${popoverOpen && popoverTab === "author" ? " is-active" : ""}${author ? " is-applied" : ""}`}
@@ -878,7 +870,7 @@ export function GitLogView() {
               className="gitlog-omni-popover"
               role="listbox"
               aria-label={popoverTab === "author" ? "作者候选" : "分支候选"}
-              onClick={e => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
             >
               <div className="gitlog-omni-tabs" role="tablist">
                 <button
@@ -886,7 +878,7 @@ export function GitLogView() {
                   role="tab"
                   aria-selected={popoverTab === "author"}
                   className={`gitlog-omni-tab${popoverTab === "author" ? " is-active" : ""}`}
-                  onMouseDown={e => e.preventDefault()}
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => setPopoverTab("author")}
                 >
                   <UserIcon />
@@ -898,7 +890,7 @@ export function GitLogView() {
                   role="tab"
                   aria-selected={popoverTab === "branch"}
                   className={`gitlog-omni-tab${popoverTab === "branch" ? " is-active" : ""}`}
-                  onMouseDown={e => e.preventDefault()}
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => setPopoverTab("branch")}
                 >
                   <BranchIcon />
@@ -909,8 +901,7 @@ export function GitLogView() {
               <div className="gitlog-omni-list">
                 {activeList.length > 0 ? (
                   activeList.map((item, idx) => {
-                    const selected =
-                      (popoverTab === "author" ? author : branch) === item.value;
+                    const selected = (popoverTab === "author" ? author : branch) === item.value;
                     const active = idx === activeIndex;
                     return (
                       <button
@@ -920,13 +911,11 @@ export function GitLogView() {
                         aria-selected={selected}
                         className={`gitlog-omni-option${active ? " is-active" : ""}${selected ? " is-selected" : ""}`}
                         onMouseEnter={() => setActiveIndex(idx)}
-                        onMouseDown={e => e.preventDefault()}
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={() => selectSuggestion(item)}
                       >
                         <span className="gitlog-omni-option-label">{item.label}</span>
-                        {item.meta && (
-                          <span className="gitlog-omni-option-meta">{item.meta}</span>
-                        )}
+                        {item.meta && <span className="gitlog-omni-option-meta">{item.meta}</span>}
                         {selected && <CheckIcon className="gitlog-omni-option-check" />}
                       </button>
                     );
@@ -983,9 +972,7 @@ export function GitLogView() {
             >
               <PushIcon />
               <span>{gitBusy === "push" ? "推送中…" : "推送"}</span>
-              {aheadCount > 0 && (
-                <span className="gitlog-seg-badge is-ahead">↑{aheadCount}</span>
-              )}
+              {aheadCount > 0 && <span className="gitlog-seg-badge is-ahead">↑{aheadCount}</span>}
             </button>
             <button
               type="button"
@@ -996,9 +983,7 @@ export function GitLogView() {
             >
               <StashIcon />
               <span>贮藏</span>
-              {stashes.length > 0 && (
-                <span className="gitlog-seg-badge">{stashes.length}</span>
-              )}
+              {stashes.length > 0 && <span className="gitlog-seg-badge">{stashes.length}</span>}
             </button>
             <button
               type="button"

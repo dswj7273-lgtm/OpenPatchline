@@ -13,8 +13,9 @@ edition = "2024"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+# 仅构建桌面端 rlib，避免 staticlib/cdylib 与 release panic=abort 在 bench 下产生产物文件名冲突 (cargo#6313)
 name = "openpatchline_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -40,3 +41,7 @@ strip = true
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bench]]
+name = "perf"
+harness = false

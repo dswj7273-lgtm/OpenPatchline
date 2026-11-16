@@ -18,6 +18,7 @@ pub mod error;
 pub mod git_remote;
 pub mod git_service;
 pub mod graph;
+pub mod logger;
 pub mod recent_repos;
 pub mod repo_manager;
 pub mod types;
@@ -69,7 +70,9 @@ pub fn run() {
             commands::list_stashes,
             commands::stash_push,
             commands::stash_apply,
-            commands::stash_drop
+            commands::stash_drop,
+            commands::log_client_error,
+            commands::get_log_file_path
         ])
         // watcher 需要 AppHandle（emit 事件），在 setup 阶段注册为全局状态。
         .setup(|app| {

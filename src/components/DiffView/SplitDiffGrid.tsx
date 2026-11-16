@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import type { TokenSpan } from "../../highlighter/tokenizer";
-import type { AlignedRow, RowCell } from "../../types";
+import type { AlignedRow } from "../../types";
 import ChangeRail, {
   groupChangeBlocks,
   KIND_LABEL,
@@ -23,6 +23,12 @@ import ChangeRail, {
   type ChangeKind,
 } from "./ChangeRail";
 import CodeCell, { CodeContent } from "./CodeCell";
+import {
+  buildUnifiedLines,
+  computeVisibleWindow,
+  findNextChangeIndex,
+  maxColsOf,
+} from "./diffGridUtils";
 
 /** 行高（px），对应 docs/06 §6 的 --code-line-height。 */
 export const ROW_H = 20;
@@ -92,29 +98,6 @@ const ZERO_OFFSETS: HOffsets = { old: 0, new: 0 };
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
-}
-
-/** 估算单行视觉列数（Tab 计 4 列，宽字符 / 中文计 2 列，ASCII 计 1 列）。 */
-function visualCols(text: string): number {
-  let cols = 0;
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code === 9) cols += 4;
-    else if (code > 0xff) cols += 2;
-    else cols += 1;
-  }
-  return cols;
-}
-
-/** 某一侧（或两侧）所有行中的最大视觉列数。 */
-function maxColsOf(rows: AlignedRow[], side: "left" | "right" | "both"): number {
-  let max = 0;
-  for (let i = 0; i < rows.length; i++) {
-    const { left, right } = rows[i];
-    if (side !== "right" && left) max = Math.max(max, visualCols(left.content));
-    if (side !== "left" && right) max = Math.max(max, visualCols(right.content));
-  }
-  return max;
 }
 
 /** 测量当前代码字体单个字符宽度（等宽字体，canvas 测量）。 */
@@ -187,9 +170,7 @@ function useDiffViewport(lineCount: number, changeIndices: number[], resetKey: u
     const el = ref.current;
     const firstChange = changeIndices[0];
     const top =
-      firstChange !== undefined
-        ? Math.max(0, firstChange * ROW_H - GOTO_PADDING_ROWS * ROW_H)
-        : 0;
+      firstChange !== undefined ? Math.max(0, firstChange * ROW_H - GOTO_PADDING_ROWS * ROW_H) : 0;
     if (el) el.scrollTop = top;
     setVp((p) => (p.scrollTop === top ? p : { ...p, scrollTop: top }));
   }, [resetKey, changeIndices]);
@@ -201,19 +182,7 @@ function useDiffViewport(lineCount: number, changeIndices: number[], resetKey: u
       const el = ref.current;
       if (!dir || !el) return;
       const firstVisible = Math.floor(el.scrollTop / ROW_H);
-      // 当前变更游标：最后一个 <= firstVisible 的变更行。
-      let cur = -1;
-      for (let k = 0; k < changeIndices.length; k++) {
-        if (changeIndices[k] <= firstVisible) cur = k;
-        else break;
-      }
-      let target: number | undefined;
-      if (dir > 0) {
-        target = changeIndices[cur + 1];
-      } else if (cur >= 0) {
-        // 已滚过当前变更头部则先回到它，否则去上一处。
-        target = firstVisible > changeIndices[cur] ? changeIndices[cur] : changeIndices[cur - 1];
-      }
+      const target = findNextChangeIndex(changeIndices, firstVisible, dir);
       if (target === undefined) return;
       el.scrollTo({
         top: Math.max(0, target * ROW_H - GOTO_PADDING_ROWS * ROW_H),
@@ -224,8 +193,7 @@ function useDiffViewport(lineCount: number, changeIndices: number[], resetKey: u
     return () => window.removeEventListener(GOTO_CHANGE_EVENT, onGoto);
   }, [changeIndices]);
 
-  const start = Math.max(0, Math.floor(vp.scrollTop / ROW_H) - OVERSCAN);
-  const end = Math.min(lineCount, Math.ceil((vp.scrollTop + vp.height) / ROW_H) + OVERSCAN);
+  const { start, end } = computeVisibleWindow(lineCount, vp.scrollTop, vp.height, ROW_H, OVERSCAN);
   return { ref, handleScroll, start, end, vp };
 }
 
@@ -476,7 +444,11 @@ export default function SplitDiffGrid({
   changeRowIndices,
   hLinked,
 }: SplitDiffGridProps) {
-  const { ref, handleScroll, start, end, vp } = useDiffViewport(rows.length, changeRowIndices, rows);
+  const { ref, handleScroll, start, end, vp } = useDiffViewport(
+    rows.length,
+    changeRowIndices,
+    rows,
+  );
   const { onJumpToRow, onScrollTo } = useJumpHandlers(ref);
   const charW = useCharWidth(ref);
 
@@ -486,8 +458,10 @@ export default function SplitDiffGrid({
   const half = Math.floor(vp.width / 2);
   const viewOld = Math.max(0, half - GUTTER_W);
   const viewNew = Math.max(0, vp.width - half - GUTTER_W);
-  const maxOld = vp.width > 0 ? Math.max(0, colsOld * charW + CONTENT_PAD + END_SLACK - viewOld) : 0;
-  const maxNew = vp.width > 0 ? Math.max(0, colsNew * charW + CONTENT_PAD + END_SLACK - viewNew) : 0;
+  const maxOld =
+    vp.width > 0 ? Math.max(0, colsOld * charW + CONTENT_PAD + END_SLACK - viewOld) : 0;
+  const maxNew =
+    vp.width > 0 ? Math.max(0, colsNew * charW + CONTENT_PAD + END_SLACK - viewNew) : 0;
 
   const { hx, scrollTo } = useHorizontalScroll(ref, {
     split: true,
@@ -523,13 +497,7 @@ export default function SplitDiffGrid({
   for (let i = start; i < end; i++) {
     const row = rows[i];
     items.push(
-      <div
-        className="diff-row"
-        role="row"
-        aria-rowindex={i + 1}
-        key={i}
-        style={{ top: i * ROW_H }}
-      >
+      <div className="diff-row" role="row" aria-rowindex={i + 1} key={i} style={{ top: i * ROW_H }}>
         <CodeCell cell={row.left} side="old" tokens={leftTokens[i] ?? EMPTY_TOKENS} />
         <CodeCell cell={row.right} side="new" tokens={rightTokens[i] ?? EMPTY_TOKENS} />
       </div>,
@@ -541,7 +509,13 @@ export default function SplitDiffGrid({
   return (
     <>
       <div className="diff-grid-wrap">
-        <div className="diff-grid" ref={ref} onScroll={handleScroll} role="grid" aria-rowcount={rows.length}>
+        <div
+          className="diff-grid"
+          ref={ref}
+          onScroll={handleScroll}
+          role="grid"
+          aria-rowcount={rows.length}
+        >
           <div
             className="diff-grid__sizer"
             style={{ height: rows.length * ROW_H + (hasHScroll ? HSCROLL_RESERVE : 0) }}
@@ -582,45 +556,15 @@ export default function SplitDiffGrid({
   );
 }
 
-/** 统一视图的单行：旧 / 新行号 + 内容。 */
-interface UnifiedLine {
-  oldNo: number | null;
-  newNo: number | null;
-  cell: RowCell;
-  /** 源 AlignedRow 下标（token 查找用）。 */
-  rowIndex: number;
-  side: "old" | "new";
-}
-
 /** 统一视图：上下文一行；修改对拆成先删后增两行；spacer 行跳过。 */
 export function UnifiedGrid({ rows, leftTokens, rightTokens }: UnifiedGridProps) {
-  const { lines, changeLineIndices } = useMemo(() => {
-    const lines: UnifiedLine[] = [];
-    const changes: number[] = [];
-    for (let i = 0; i < rows.length; i++) {
-      const { left, right } = rows[i];
-      if (left && right) {
-        if (left.kind === "context") {
-          lines.push({ oldNo: left.lineno, newNo: right.lineno, cell: left, rowIndex: i, side: "old" });
-        } else {
-          // 修改对：先删除行后新增行。
-          lines.push({ oldNo: left.lineno, newNo: null, cell: left, rowIndex: i, side: "old" });
-          lines.push({ oldNo: null, newNo: right.lineno, cell: right, rowIndex: i, side: "new" });
-        }
-      } else if (left) {
-        lines.push({ oldNo: left.lineno, newNo: null, cell: left, rowIndex: i, side: "old" });
-      } else if (right) {
-        lines.push({ oldNo: null, newNo: right.lineno, cell: right, rowIndex: i, side: "new" });
-      }
-      // 双 spacer 行（不应出现）直接跳过。
-    }
-    for (let l = 0; l < lines.length; l++) {
-      if (lines[l].cell.kind !== "context") changes.push(l);
-    }
-    return { lines, changeLineIndices: changes };
-  }, [rows]);
+  const { lines, changeLineIndices } = useMemo(() => buildUnifiedLines(rows), [rows]);
 
-  const { ref, handleScroll, start, end, vp } = useDiffViewport(lines.length, changeLineIndices, lines);
+  const { ref, handleScroll, start, end, vp } = useDiffViewport(
+    lines.length,
+    changeLineIndices,
+    lines,
+  );
   const { onJumpToRow, onScrollTo } = useJumpHandlers(ref);
   const charW = useCharWidth(ref);
 

@@ -101,8 +101,12 @@ export default function DiffFileList({ files, currentIndex, onSelect }: DiffFile
                   </span>
                   {(f.additions > 0 || f.deletions > 0) && (
                     <span className="diff-file-list__stats">
-                      {f.additions > 0 && <span className="diff-header__stat-add">+{f.additions}</span>}
-                      {f.deletions > 0 && <span className="diff-header__stat-remove">−{f.deletions}</span>}
+                      {f.additions > 0 && (
+                        <span className="diff-header__stat-add">+{f.additions}</span>
+                      )}
+                      {f.deletions > 0 && (
+                        <span className="diff-header__stat-remove">−{f.deletions}</span>
+                      )}
                     </span>
                   )}
                 </button>

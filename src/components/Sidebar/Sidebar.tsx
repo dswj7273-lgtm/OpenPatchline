@@ -97,9 +97,15 @@ interface DirNode {
 function buildTree(entries: FileStatus[]): DirNode {
   const root: DirNode = { name: "", path: "", dirs: [], files: [], count: 0 };
   const ensureDir = (node: DirNode, seg: string): DirNode => {
-    let child = node.dirs.find(d => d.name === seg);
+    let child = node.dirs.find((d) => d.name === seg);
     if (!child) {
-      child = { name: seg, path: node.path ? `${node.path}/${seg}` : seg, dirs: [], files: [], count: 0 };
+      child = {
+        name: seg,
+        path: node.path ? `${node.path}/${seg}` : seg,
+        dirs: [],
+        files: [],
+        count: 0,
+      };
       node.dirs.push(child);
     }
     return child;
@@ -139,7 +145,7 @@ function buildTree(entries: FileStatus[]): DirNode {
 
 /** 当前过滤树中的文件集合。 */
 function collectFilePaths(node: DirNode): string[] {
-  const paths = node.files.map(file => file.path);
+  const paths = node.files.map((file) => file.path);
   for (const dir of node.dirs) paths.push(...collectFilePaths(dir));
   return paths;
 }
@@ -171,7 +177,12 @@ function FileGroup({
   return (
     <section className={`sidebar-group${conflictGroup ? " sidebar-group--conflict" : ""}`}>
       <div className="sidebar-group-bar">
-        <button type="button" className="sidebar-group-header" aria-expanded={open} onClick={onToggle}>
+        <button
+          type="button"
+          className="sidebar-group-header"
+          aria-expanded={open}
+          onClick={onToggle}
+        >
           <ChevronRightIcon className={`sidebar-caret${open ? " is-open" : ""}`} />
           <span className="sidebar-group-title">{title}</span>
           <span
@@ -186,7 +197,7 @@ function FileGroup({
             className="icon-btn sidebar-group-batch"
             aria-label={batchLabel}
             title={batchLabel}
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation();
               onBatchAction();
             }}
@@ -246,7 +257,10 @@ function FileRow({
         aria-label={`${entry.path}，${label}，${sideLabel}`}
         onClick={onOpen}
       >
-        <span className={`sidebar-file-status badge-${isConflict ? "conflicted" : changeType}`} title={label}>
+        <span
+          className={`sidebar-file-status badge-${isConflict ? "conflicted" : changeType}`}
+          title={label}
+        >
           {letter}
         </span>
         <span className="sidebar-file-path">
@@ -314,7 +328,7 @@ function TreeView({
   const pad = { paddingLeft: `${8 + depth * 14}px` };
   return (
     <>
-      {node.dirs.map(d => (
+      {node.dirs.map((d) => (
         <div key={`d:${d.path}`}>
           <div className="sidebar-dir" title={`${d.path}/（${d.count} 个文件）`}>
             <button
@@ -325,7 +339,9 @@ function TreeView({
               aria-label={`${expanded.has(d.path) ? "折叠" : "展开"} ${d.name}`}
               onClick={() => onToggleDir(d.path)}
             >
-              <ChevronRightIcon className={`sidebar-caret${expanded.has(d.path) ? " is-open" : ""}`} />
+              <ChevronRightIcon
+                className={`sidebar-caret${expanded.has(d.path) ? " is-open" : ""}`}
+              />
               <span className="sidebar-dir-name">{d.name}/</span>
               <span className="sidebar-dir-count">{d.count}</span>
             </button>
@@ -333,7 +349,11 @@ function TreeView({
               type="button"
               className="icon-btn sidebar-stage-btn"
               aria-label={side === "staged" ? `取消暂存目录 ${d.path}` : `暂存目录 ${d.path}`}
-              title={side === "staged" ? `取消暂存当前分组中的 ${d.count} 个文件` : `暂存当前分组中的 ${d.count} 个文件`}
+              title={
+                side === "staged"
+                  ? `取消暂存当前分组中的 ${d.count} 个文件`
+                  : `暂存当前分组中的 ${d.count} 个文件`
+              }
               onClick={() => onStageDir(d.path, collectFilePaths(d))}
             >
               {side === "staged" ? <MinusIcon /> : <PlusIcon />}
@@ -356,7 +376,7 @@ function TreeView({
           )}
         </div>
       ))}
-      {node.files.map(f => (
+      {node.files.map((f) => (
         <FileRow
           key={`f:${side}:${f.path}`}
           entry={f}
@@ -396,36 +416,37 @@ function BranchPanel({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const repo = useAppStore(s => s.repo);
-  const branches = useAppStore(s => s.branches);
-  const branchesLoading = useAppStore(s => s.branchesLoading);
-  const gitBusy = useAppStore(s => s.gitBusy);
-  const checkoutBranch = useAppStore(s => s.checkoutBranch);
-  const createBranch = useAppStore(s => s.createBranch);
-  const mergeBranch = useAppStore(s => s.mergeBranch);
-  const deleteBranch = useAppStore(s => s.deleteBranch);
-  const loadBranches = useAppStore(s => s.loadBranches);
+  const repo = useAppStore((s) => s.repo);
+  const branches = useAppStore((s) => s.branches);
+  const branchesLoading = useAppStore((s) => s.branchesLoading);
+  const gitBusy = useAppStore((s) => s.gitBusy);
+  const checkoutBranch = useAppStore((s) => s.checkoutBranch);
+  const createBranch = useAppStore((s) => s.createBranch);
+  const mergeBranch = useAppStore((s) => s.mergeBranch);
+  const deleteBranch = useAppStore((s) => s.deleteBranch);
+  const loadBranches = useAppStore((s) => s.loadBranches);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [newBranch, setNewBranch] = useState("");
 
-  const currentBranch = useMemo(
-    () => branches.find(b => b.isCurrent) ?? null,
-    [branches],
-  );
+  const currentBranch = useMemo(() => branches.find((b) => b.isCurrent) ?? null, [branches]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const locals = useMemo(
     () =>
       branches.filter(
-        b => b.kind === "local" && (!normalizedQuery || b.name.toLowerCase().includes(normalizedQuery)),
+        (b) =>
+          b.kind === "local" &&
+          (!normalizedQuery || b.name.toLowerCase().includes(normalizedQuery)),
       ),
     [branches, normalizedQuery],
   );
   const remotes = useMemo(
     () =>
       branches.filter(
-        b => b.kind === "remote" && (!normalizedQuery || b.name.toLowerCase().includes(normalizedQuery)),
+        (b) =>
+          b.kind === "remote" &&
+          (!normalizedQuery || b.name.toLowerCase().includes(normalizedQuery)),
       ),
     [branches, normalizedQuery],
   );
@@ -465,7 +486,9 @@ function BranchPanel({
         <span className="sidebar-branch-name">{repo?.headBranch ?? "(detached)"}</span>
         {currentBranch && <AheadBehind branch={currentBranch} />}
         <span className="sidebar-branch-label">HEAD</span>
-        <ChevronRightIcon className={`sidebar-caret sidebar-branch-caret${open ? " is-open" : ""}`} />
+        <ChevronRightIcon
+          className={`sidebar-caret sidebar-branch-caret${open ? " is-open" : ""}`}
+        />
       </button>
 
       {open && (
@@ -478,8 +501,8 @@ function BranchPanel({
               aria-label="新建分支名"
               value={newBranch}
               disabled={gitBusy !== null}
-              onChange={e => setNewBranch(e.target.value)}
-              onKeyDown={e => {
+              onChange={(e) => setNewBranch(e.target.value)}
+              onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
                   void submitNewBranch();
@@ -507,7 +530,7 @@ function BranchPanel({
                 placeholder="筛选分支…"
                 aria-label="筛选分支"
                 value={query}
-                onChange={e => setQuery(e.target.value)}
+                onChange={(e) => setQuery(e.target.value)}
               />
             </div>
           )}
@@ -523,11 +546,8 @@ function BranchPanel({
           )}
 
           {locals.length > 0 && <div className="sidebar-branch-group-title">本地分支</div>}
-          {locals.map(b => (
-            <div
-              key={b.name}
-              className={`sidebar-branch-row${b.isCurrent ? " is-current" : ""}`}
-            >
+          {locals.map((b) => (
+            <div key={b.name} className={`sidebar-branch-row${b.isCurrent ? " is-current" : ""}`}>
               <button
                 type="button"
                 role="option"
@@ -577,7 +597,7 @@ function BranchPanel({
               type="button"
               className="sidebar-branch-group-toggle"
               aria-expanded={remoteOpen || Boolean(normalizedQuery)}
-              onClick={() => setRemoteOpen(v => !v)}
+              onClick={() => setRemoteOpen((v) => !v)}
             >
               <ChevronRightIcon
                 className={`sidebar-caret${remoteOpen || normalizedQuery ? " is-open" : ""}`}
@@ -587,7 +607,7 @@ function BranchPanel({
             </button>
           )}
           {(remoteOpen || Boolean(normalizedQuery)) &&
-            remotes.map(b => (
+            remotes.map((b) => (
               <button
                 key={b.name}
                 type="button"
@@ -610,23 +630,23 @@ function BranchPanel({
 }
 
 export function Sidebar() {
-  const repo = useAppStore(s => s.repo);
-  const fileStatus = useAppStore(s => s.fileStatus);
-  const loadFileStatus = useAppStore(s => s.loadFileStatus);
-  const stageFile = useAppStore(s => s.stageFile);
-  const stageFiles = useAppStore(s => s.stageFiles);
-  const unstageFile = useAppStore(s => s.unstageFile);
-  const unstageFiles = useAppStore(s => s.unstageFiles);
-  const openFileDiff = useAppStore(s => s.openFileDiff);
-  const createCommit = useAppStore(s => s.createCommit);
-  const amendCommit = useAppStore(s => s.amendCommit);
-  const discardFile = useAppStore(s => s.discardFile);
-  const gitBusy = useAppStore(s => s.gitBusy);
-  const graphRows = useAppStore(s => s.graphRows);
-  const activeView = useAppStore(s => s.activeView);
-  const diffScope = useAppStore(s => s.diffScope);
-  const diffFiles = useAppStore(s => s.diffFiles);
-  const selectedDiffFileIndex = useAppStore(s => s.selectedDiffFileIndex);
+  const repo = useAppStore((s) => s.repo);
+  const fileStatus = useAppStore((s) => s.fileStatus);
+  const loadFileStatus = useAppStore((s) => s.loadFileStatus);
+  const stageFile = useAppStore((s) => s.stageFile);
+  const stageFiles = useAppStore((s) => s.stageFiles);
+  const unstageFile = useAppStore((s) => s.unstageFile);
+  const unstageFiles = useAppStore((s) => s.unstageFiles);
+  const openFileDiff = useAppStore((s) => s.openFileDiff);
+  const createCommit = useAppStore((s) => s.createCommit);
+  const amendCommit = useAppStore((s) => s.amendCommit);
+  const discardFile = useAppStore((s) => s.discardFile);
+  const gitBusy = useAppStore((s) => s.gitBusy);
+  const graphRows = useAppStore((s) => s.graphRows);
+  const activeView = useAppStore((s) => s.activeView);
+  const diffScope = useAppStore((s) => s.diffScope);
+  const diffFiles = useAppStore((s) => s.diffFiles);
+  const selectedDiffFileIndex = useAppStore((s) => s.selectedDiffFileIndex);
 
   const [width, setWidth] = useState(readSidebarWidth);
   const [resizing, setResizing] = useState(false);
@@ -670,17 +690,18 @@ export function Sidebar() {
     setResizing(false);
   };
 
-  const conflicted = useMemo(() => fileStatus.filter(f => f.conflicted), [fileStatus]);
+  const conflicted = useMemo(() => fileStatus.filter((f) => f.conflicted), [fileStatus]);
   const staged = useMemo(
-    () => fileStatus.filter(f => !f.conflicted && f.staged !== null),
+    () => fileStatus.filter((f) => !f.conflicted && f.staged !== null),
     [fileStatus],
   );
   const unstagedTracked = useMemo(
-    () => fileStatus.filter(f => !f.conflicted && f.unstaged !== null && f.unstaged !== "untracked"),
+    () =>
+      fileStatus.filter((f) => !f.conflicted && f.unstaged !== null && f.unstaged !== "untracked"),
     [fileStatus],
   );
   const untracked = useMemo(
-    () => fileStatus.filter(f => !f.conflicted && f.unstaged === "untracked"),
+    () => fileStatus.filter((f) => !f.conflicted && f.unstaged === "untracked"),
     [fileStatus],
   );
 
@@ -689,12 +710,13 @@ export function Sidebar() {
   const changesTree = useMemo(() => buildTree(unstagedTracked), [unstagedTracked]);
   const untrackedTree = useMemo(() => buildTree(untracked), [untracked]);
 
-  const activeDiffPath = activeView === "diff" ? (diffFiles[selectedDiffFileIndex]?.path ?? null) : null;
+  const activeDiffPath =
+    activeView === "diff" ? (diffFiles[selectedDiffFileIndex]?.path ?? null) : null;
   const activeStagedPath = diffScope?.kind === "staged" ? activeDiffPath : null;
   const activeWorkdirPath = diffScope?.kind === "workdir" ? activeDiffPath : null;
 
   const toggleDir = (path: string) => {
-    setExpandedDirs(prev => {
+    setExpandedDirs((prev) => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
@@ -721,7 +743,7 @@ export function Sidebar() {
     setAmend(checked);
     if (checked && !message.trim()) {
       const headMsg =
-        graphRows.find(r => r.commit.id === repo?.headCommit)?.commit.message ??
+        graphRows.find((r) => r.commit.id === repo?.headCommit)?.commit.message ??
         graphRows[0]?.commit.message ??
         "";
       if (headMsg) setMessage(headMsg);
@@ -788,10 +810,10 @@ export function Sidebar() {
               count={conflicted.length}
               conflictGroup
               open={conflictsOpen}
-              onToggle={() => setConflictsOpen(v => !v)}
+              onToggle={() => setConflictsOpen((v) => !v)}
               batchLabel="标记全部冲突文件为已解决并暂存"
               batchIcon={<CheckIcon />}
-              onBatchAction={() => void stageFiles(conflicted.map(f => f.path))}
+              onBatchAction={() => void stageFiles(conflicted.map((f) => f.path))}
             >
               <TreeView
                 node={conflictTree}
@@ -800,9 +822,9 @@ export function Sidebar() {
                 expanded={expandedDirs}
                 activePath={activeWorkdirPath}
                 onToggleDir={toggleDir}
-                onOpenFile={f => openEntry(f, "unstaged")}
+                onOpenFile={(f) => openEntry(f, "unstaged")}
                 onStageDir={(_, paths) => void stageFiles(paths)}
-                onStageFile={p => void stageFile(p)}
+                onStageFile={(p) => void stageFile(p)}
               />
             </FileGroup>
           )}
@@ -812,10 +834,10 @@ export function Sidebar() {
             count={staged.length}
             accentCount
             open={stagedOpen}
-            onToggle={() => setStagedOpen(v => !v)}
+            onToggle={() => setStagedOpen((v) => !v)}
             batchLabel="取消暂存全部已暂存文件"
             batchIcon={<MinusIcon />}
-            onBatchAction={() => void unstageFiles(staged.map(f => f.path))}
+            onBatchAction={() => void unstageFiles(staged.map((f) => f.path))}
           >
             {staged.length > 0 ? (
               <TreeView
@@ -825,9 +847,9 @@ export function Sidebar() {
                 expanded={expandedDirs}
                 activePath={activeStagedPath}
                 onToggleDir={toggleDir}
-                onOpenFile={f => openEntry(f, "staged")}
+                onOpenFile={(f) => openEntry(f, "staged")}
                 onStageDir={(_, paths) => void unstageFiles(paths)}
-                onStageFile={p => void unstageFile(p)}
+                onStageFile={(p) => void unstageFile(p)}
               />
             ) : (
               <p className="sidebar-group-empty">暂无已暂存更改</p>
@@ -838,10 +860,10 @@ export function Sidebar() {
             title="工作区更改"
             count={unstagedTracked.length}
             open={changesOpen}
-            onToggle={() => setChangesOpen(v => !v)}
+            onToggle={() => setChangesOpen((v) => !v)}
             batchLabel="暂存全部工作区更改"
             batchIcon={<PlusIcon />}
-            onBatchAction={() => void stageFiles(unstagedTracked.map(f => f.path))}
+            onBatchAction={() => void stageFiles(unstagedTracked.map((f) => f.path))}
           >
             {unstagedTracked.length > 0 ? (
               <TreeView
@@ -852,10 +874,10 @@ export function Sidebar() {
                 activePath={activeWorkdirPath}
                 discardDisabled={gitBusy !== null}
                 onToggleDir={toggleDir}
-                onOpenFile={f => openEntry(f, "unstaged")}
+                onOpenFile={(f) => openEntry(f, "unstaged")}
                 onStageDir={(_, paths) => void stageFiles(paths)}
-                onStageFile={p => void stageFile(p)}
-                onDiscardFile={p => void discardFile(p)}
+                onStageFile={(p) => void stageFile(p)}
+                onDiscardFile={(p) => void discardFile(p)}
               />
             ) : (
               <p className="sidebar-group-empty">工作区无未暂存修改</p>
@@ -866,10 +888,10 @@ export function Sidebar() {
             title="未跟踪文件"
             count={untracked.length}
             open={untrackedOpen}
-            onToggle={() => setUntrackedOpen(v => !v)}
+            onToggle={() => setUntrackedOpen((v) => !v)}
             batchLabel="暂存全部未跟踪文件"
             batchIcon={<PlusIcon />}
-            onBatchAction={() => void stageFiles(untracked.map(f => f.path))}
+            onBatchAction={() => void stageFiles(untracked.map((f) => f.path))}
           >
             {untracked.length > 0 ? (
               <TreeView
@@ -880,10 +902,10 @@ export function Sidebar() {
                 activePath={activeWorkdirPath}
                 discardDisabled={gitBusy !== null}
                 onToggleDir={toggleDir}
-                onOpenFile={f => openEntry(f, "unstaged")}
+                onOpenFile={(f) => openEntry(f, "unstaged")}
                 onStageDir={(_, paths) => void stageFiles(paths)}
-                onStageFile={p => void stageFile(p)}
-                onDiscardFile={p => void discardFile(p)}
+                onStageFile={(p) => void stageFile(p)}
+                onDiscardFile={(p) => void discardFile(p)}
               />
             ) : (
               <p className="sidebar-group-empty">没有未跟踪文件</p>
@@ -899,8 +921,8 @@ export function Sidebar() {
               aria-label="提交信息"
               aria-keyshortcuts="Meta+Enter Control+Enter"
               value={message}
-              onChange={e => setMessage(e.target.value)}
-              onKeyDown={e => {
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={(e) => {
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                   e.preventDefault();
                   void submitCommit();
@@ -912,7 +934,7 @@ export function Sidebar() {
                 type="checkbox"
                 checked={amend}
                 disabled={busy || hasConflicts || isRebasing || !repo?.headCommit}
-                onChange={e => toggleAmend(e.target.checked)}
+                onChange={(e) => toggleAmend(e.target.checked)}
               />
               <span>修正上次提交 (Amend)</span>
             </label>

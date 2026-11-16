@@ -26,6 +26,7 @@ import {
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { useAppStore } from "./store/app";
 import type { GitProgressEvent, RepoState } from "./types";
+import { reportError } from "./utils/errors";
 
 const OPEN_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘ O" : "Ctrl O";
 const THEME_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘⇧T" : "Ctrl+Shift+T";
@@ -38,7 +39,7 @@ const DiffView = diffViewModule.DiffView ?? diffViewModule.default ?? (() => nul
 
 /** 打开仓库按钮（原生目录选择框由 Rust 侧弹出）。 */
 function OpenRepoButton({ big }: { big?: boolean }) {
-  const openRepo = useAppStore(s => s.openRepo);
+  const openRepo = useAppStore((s) => s.openRepo);
   const [opening, setOpening] = useState(false);
 
   const onOpen = async () => {
@@ -61,7 +62,9 @@ function OpenRepoButton({ big }: { big?: boolean }) {
       >
         <FolderOpenIcon />
         <span>{opening ? "正在打开…" : "打开 Git 仓库"}</span>
-        <kbd className="empty-cta-kbd" aria-hidden="true">{OPEN_SHORTCUT}</kbd>
+        <kbd className="empty-cta-kbd" aria-hidden="true">
+          {OPEN_SHORTCUT}
+        </kbd>
       </button>
     );
   }
@@ -100,13 +103,13 @@ const REPO_STATE_VERB: Record<Exclude<RepoState, "clean">, string> = {
 
 /** 顶栏：品牌标识 + 仓库切换器 + 分支面包屑 + 主题切换 + 打开仓库。 */
 function TopBar() {
-  const repo = useAppStore(s => s.repo);
-  const recentRepos = useAppStore(s => s.recentRepos);
-  const openRepo = useAppStore(s => s.openRepo);
-  const removeRecentRepo = useAppStore(s => s.removeRecentRepo);
-  const loadRecentRepos = useAppStore(s => s.loadRecentRepos);
-  const theme = useAppStore(s => s.theme);
-  const setTheme = useAppStore(s => s.setTheme);
+  const repo = useAppStore((s) => s.repo);
+  const recentRepos = useAppStore((s) => s.recentRepos);
+  const openRepo = useAppStore((s) => s.openRepo);
+  const removeRecentRepo = useAppStore((s) => s.removeRecentRepo);
+  const loadRecentRepos = useAppStore((s) => s.loadRecentRepos);
+  const theme = useAppStore((s) => s.theme);
+  const setTheme = useAppStore((s) => s.setTheme);
 
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const switcherRef = useRef<HTMLDivElement | null>(null);
@@ -154,7 +157,7 @@ function TopBar() {
               aria-haspopup="listbox"
               aria-expanded={switcherOpen}
               title={`切换最近仓库（当前：${repo.path}）`}
-              onClick={() => setSwitcherOpen(v => !v)}
+              onClick={() => setSwitcherOpen((v) => !v)}
             >
               <span className="top-bar-repo">{repo.name}</span>
               <ChevronDownIcon className="top-bar-repo-caret" />
@@ -169,7 +172,7 @@ function TopBar() {
                 <div className="repo-switcher-heading">最近打开的仓库</div>
                 <div className="repo-switcher-list">
                   {recentRepos.length > 0 ? (
-                    recentRepos.map(item => {
+                    recentRepos.map((item) => {
                       const isCurrent = item.id === repo.id;
                       return (
                         <div
@@ -255,14 +258,14 @@ function TopBar() {
 
 /** 冲突 / 进行中操作横幅：展示仓库状态与 Continue / Abort 控制按钮。 */
 function ConflictBanner() {
-  const repo = useAppStore(s => s.repo);
-  const fileStatus = useAppStore(s => s.fileStatus);
-  const gitBusy = useAppStore(s => s.gitBusy);
-  const abortOperation = useAppStore(s => s.abortOperation);
-  const continueOperation = useAppStore(s => s.continueOperation);
+  const repo = useAppStore((s) => s.repo);
+  const fileStatus = useAppStore((s) => s.fileStatus);
+  const gitBusy = useAppStore((s) => s.gitBusy);
+  const abortOperation = useAppStore((s) => s.abortOperation);
+  const continueOperation = useAppStore((s) => s.continueOperation);
 
   const conflictedCount = useMemo(
-    () => fileStatus.filter(f => f.conflicted).length,
+    () => fileStatus.filter((f) => f.conflicted).length,
     [fileStatus],
   );
 
@@ -290,9 +293,7 @@ function ConflictBanner() {
             className="btn btn-primary btn-sm"
             disabled={busy || !canContinue}
             title={
-              conflictedCount > 0
-                ? `还有 ${conflictedCount} 个冲突文件未解决`
-                : `继续完成${verb}`
+              conflictedCount > 0 ? `还有 ${conflictedCount} 个冲突文件未解决` : `继续完成${verb}`
             }
             onClick={() => void continueOperation()}
           >
@@ -317,13 +318,14 @@ function ConflictBanner() {
 
 /** 远程操作（fetch / pull / push）实时流式进度条与取消入口。 */
 function RemoteProgressStrip() {
-  const gitBusy = useAppStore(s => s.gitBusy);
-  const remoteProgress = useAppStore(s => s.remoteProgress);
-  const cancelRemoteOp = useAppStore(s => s.cancelRemoteOp);
+  const gitBusy = useAppStore((s) => s.gitBusy);
+  const remoteProgress = useAppStore((s) => s.remoteProgress);
+  const cancelRemoteOp = useAppStore((s) => s.cancelRemoteOp);
 
   if (gitBusy !== "fetch" && gitBusy !== "pull" && gitBusy !== "push") return null;
 
-  const opLabel = gitBusy === "fetch" ? "正在获取远程" : gitBusy === "pull" ? "正在拉取更新" : "正在推送";
+  const opLabel =
+    gitBusy === "fetch" ? "正在获取远程" : gitBusy === "pull" ? "正在拉取更新" : "正在推送";
   const pct = remoteProgress?.percent ?? null;
 
   return (
@@ -350,36 +352,72 @@ function RemoteProgressStrip() {
   );
 }
 
-/** 错误提示条；store 无 clearError 动作，隐藏状态在组件内本地维护。 */
+/** 错误提示条；支持多行详情展开与一键复制错误文本。 */
 function ErrorStrip() {
-  const error = useAppStore(s => s.error);
-  const [hidden, setHidden] = useState(false);
+  const error = useAppStore((s) => s.error);
+  const clearError = useAppStore((s) => s.clearError);
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    setHidden(false);
+    setExpanded(false);
+    setCopied(false);
   }, [error]);
 
-  if (!error || hidden) return null;
+  if (!error) return null;
+
+  const lines = error
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const summary = lines[0] ?? error;
+  const hasMore = lines.length > 1 || summary.length > 100;
+
+  const onCopy = () => {
+    void navigator.clipboard?.writeText(error).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
   return (
-    <div className="error-strip" role="alert">
-      <AlertIcon className="strip-icon" />
-      <span className="error-text">{error}</span>
-      <button
-        type="button"
-        className="icon-btn strip-close"
-        aria-label="关闭错误提示"
-        onClick={() => setHidden(true)}
-      >
-        <CloseIcon />
-      </button>
+    <div className="error-strip-wrap" role="alert">
+      <div className="error-strip">
+        <AlertIcon className="strip-icon" />
+        <span className="error-text" title={error}>
+          {summary}
+        </span>
+        {hasMore && (
+          <button
+            type="button"
+            className="btn btn-sm error-strip-btn"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? "收起" : "详情"}
+          </button>
+        )}
+        <button type="button" className="btn btn-sm error-strip-btn" onClick={onCopy}>
+          {copied ? "已复制" : "复制"}
+        </button>
+        <button
+          type="button"
+          className="icon-btn strip-close"
+          aria-label="关闭错误提示"
+          onClick={clearError}
+        >
+          <CloseIcon />
+        </button>
+      </div>
+      {expanded && <pre className="error-strip-detail">{error}</pre>}
     </div>
   );
 }
 
 /** 成功提示条（拉取完成等）；与 ErrorStrip 同构，手动关闭。 */
 function NoticeStrip() {
-  const notice = useAppStore(s => s.notice);
-  const dismissNotice = useAppStore(s => s.dismissNotice);
+  const notice = useAppStore((s) => s.notice);
+  const dismissNotice = useAppStore((s) => s.dismissNotice);
   const [hidden, setHidden] = useState(false);
 
   useEffect(() => {
@@ -408,9 +446,9 @@ function NoticeStrip() {
 
 /** 「所选目录不是仓库」弹层：列出直接子目录中的仓库供选择。 */
 function RepoCandidateModal() {
-  const repoCandidates = useAppStore(s => s.repoCandidates);
-  const openRepo = useAppStore(s => s.openRepo);
-  const dismiss = useAppStore(s => s.dismissRepoCandidates);
+  const repoCandidates = useAppStore((s) => s.repoCandidates);
+  const openRepo = useAppStore((s) => s.openRepo);
+  const dismiss = useAppStore((s) => s.dismissRepoCandidates);
   const [opening, setOpening] = useState(false);
 
   useEffect(() => {
@@ -443,7 +481,7 @@ function RepoCandidateModal() {
       role="dialog"
       aria-modal="true"
       aria-label="选择仓库"
-      onClick={e => {
+      onClick={(e) => {
         if (e.target === e.currentTarget && !opening) dismiss();
       }}
     >
@@ -466,7 +504,7 @@ function RepoCandidateModal() {
         </p>
         {repoCandidates.candidates.length > 0 ? (
           <ul className="repo-picker-list">
-            {repoCandidates.candidates.map(c => (
+            {repoCandidates.candidates.map((c) => (
               <li key={c.path}>
                 <button
                   type="button"
@@ -493,7 +531,12 @@ function RepoCandidateModal() {
           <button type="button" className="btn" disabled={opening} onClick={dismiss}>
             关闭
           </button>
-          <button type="button" className="btn btn-primary" disabled={opening} onClick={() => void onPick("")}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={opening}
+            onClick={() => void onPick("")}
+          >
             选择其他目录…
           </button>
         </div>
@@ -503,22 +546,34 @@ function RepoCandidateModal() {
 }
 
 export default function App() {
-  const repo = useAppStore(s => s.repo);
-  const recentRepos = useAppStore(s => s.recentRepos);
-  const openRepo = useAppStore(s => s.openRepo);
-  const removeRecentRepo = useAppStore(s => s.removeRecentRepo);
-  const activeView = useAppStore(s => s.activeView);
-  const theme = useAppStore(s => s.theme);
-  const goBackToLog = useAppStore(s => s.goBackToLog);
+  const repo = useAppStore((s) => s.repo);
+  const recentRepos = useAppStore((s) => s.recentRepos);
+  const openRepo = useAppStore((s) => s.openRepo);
+  const removeRecentRepo = useAppStore((s) => s.removeRecentRepo);
+  const activeView = useAppStore((s) => s.activeView);
+  const theme = useAppStore((s) => s.theme);
+  const goBackToLog = useAppStore((s) => s.goBackToLog);
 
   // 主题落到 <html data-theme>，驱动 theme.css 的令牌覆盖。
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
-  // 启动时加载最近打开的仓库列表（后端自动清理失效路径）。
+  // 启动时加载最近打开的仓库列表（后端自动清理失效路径），并绑定全局未捕获错误日志。
   useEffect(() => {
     void useAppStore.getState().loadRecentRepos();
+    const onError = (ev: ErrorEvent) => {
+      reportError("window.error", ev.error ?? ev.message);
+    };
+    const onRejection = (ev: PromiseRejectionEvent) => {
+      reportError("unhandledrejection", ev.reason);
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
   }, []);
 
   // 仓库变更监听（Rust notify 监听 .git，防抖后推送）：外部操作后自动刷新。
@@ -534,13 +589,13 @@ export default function App() {
       void state.loadFileStatus();
       void state.reloadGraph();
       void state.loadBranches();
-    }).then(fn => {
+    }).then((fn) => {
       if (cancelled) fn();
       else unlistenStatus = fn;
     });
     void listen<GitProgressEvent>("git_remote_progress", (event) => {
       useAppStore.getState().setRemoteProgress(event.payload);
-    }).then(fn => {
+    }).then((fn) => {
       if (cancelled) fn();
       else unlistenProgress = fn;
     });
@@ -597,7 +652,7 @@ export default function App() {
               <div className="empty-recent">
                 <div className="empty-recent-title">最近打开的仓库</div>
                 <ul className="empty-recent-list">
-                  {recentRepos.slice(0, 6).map(item => (
+                  {recentRepos.slice(0, 6).map((item) => (
                     <li key={item.id} className="empty-recent-row">
                       <button
                         type="button"

@@ -35,8 +35,12 @@ jobs:
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: performance benchmark (observation)
+        run: cargo bench --manifest-path src-tauri/Cargo.toml --bench perf
+        continue-on-error: true
+
   frontend:
-    name: Frontend (tsc + lint + test + build)
+    name: Frontend (tsc + lint + format + test + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +53,16 @@ jobs:
       - run: npm ci
 
       - name: type check
-        run: npx tsc --noEmit
+        run: npm run typecheck
+
+      - name: lint
+        run: npm run lint
+
+      - name: format check
+        run: npm run format:check
+
+      - name: unit tests
+        run: npm run test
 
       - name: build
         run: npm run build

@@ -31,6 +31,7 @@ use crate::error::{AppError, AppResult};
 use crate::git_remote::{self, RemoteOpManager, RemoteProgress};
 use crate::git_service;
 use crate::graph;
+use crate::logger;
 use crate::recent_repos;
 use crate::repo_manager::{RepoManager, lock_entry};
 use crate::types::{
@@ -407,7 +408,11 @@ where
             repo_id: &repo_id,
             on_line: &emit,
         };
-        task(&entry.repo, &workdir, progress)
+        let res = task(&entry.repo, &workdir, progress);
+        if let Err(ref e) = res {
+            logger::log_backend_error(&app, op_kind, e);
+        }
+        res
     })
     .await
     .map_err(join_error)?
@@ -818,4 +823,27 @@ pub async fn stash_drop(
     })
     .await
     .map_err(join_error)?
+}
+
+/// 记录前端上报的错误/告警日志到本地日志文件。
+#[tauri::command]
+pub async fn log_client_error(
+    app: tauri::AppHandle,
+    level: String,
+    source: String,
+    message: String,
+) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+        let file = logger::log_file(&app)?;
+        logger::append_log(&file, &level, &source, &message)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 获取本地日志文件的绝对路径（便于用户排查或定位日志）。
+#[tauri::command]
+pub async fn get_log_file_path(app: tauri::AppHandle) -> AppResult<String> {
+    let file = logger::log_file(&app)?;
+    Ok(file.to_string_lossy().into_owned())
 }

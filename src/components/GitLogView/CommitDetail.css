@@ -48,7 +48,9 @@
   background: var(--surface-0);
   text-align: left;
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
 }
 
 .cd-hash:hover {
@@ -193,7 +195,10 @@
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
-  transition: border-color 110ms ease, background 110ms ease, color 110ms ease;
+  transition:
+    border-color 110ms ease,
+    background 110ms ease,
+    color 110ms ease;
 }
 
 .cd-action-btn:hover:not(:disabled) {

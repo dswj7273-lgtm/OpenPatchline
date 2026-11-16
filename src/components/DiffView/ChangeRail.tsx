@@ -117,8 +117,7 @@ export default function ChangeRail({
 
   // 视口指示条：位置映射到 [0, railH - thumbH]。
   const thumbH = Math.max(MIN_THUMB_H, Math.min(railH, scale(viewportH)));
-  const thumbTop =
-    scrollable > 0 ? (scrollTop / scrollable) * (railH - thumbH) : 0;
+  const thumbTop = scrollable > 0 ? (scrollTop / scrollable) * (railH - thumbH) : 0;
 
   // 视口覆盖的行范围 → 命中的块高亮。
   const firstVisible = Math.floor(scrollTop / rowHeight);
@@ -159,8 +158,7 @@ export default function ChangeRail({
           const height = Math.max(MIN_MARKER_H, scale(b.count * rowHeight));
           const active = b.start <= lastVisible && b.start + b.count - 1 >= firstVisible;
           const label =
-            labelFor?.(b) ??
-            `${KIND_LABEL[b.kind]} · 第 ${b.start + 1} 行起 ${b.count} 行`;
+            labelFor?.(b) ?? `${KIND_LABEL[b.kind]} · 第 ${b.start + 1} 行起 ${b.count} 行`;
           return (
             <button
               key={i}

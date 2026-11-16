@@ -9,13 +9,7 @@
 
 /** 仓库所处的操作状态（用于感知合并 / 变基 / 挑选 / 撤销冲突）。 */
 export type RepoState =
-  | "clean"
-  | "merging"
-  | "rebasing"
-  | "cherryPicking"
-  | "reverting"
-  | "bisecting"
-  | "applying";
+  "clean" | "merging" | "rebasing" | "cherryPicking" | "reverting" | "bisecting" | "applying";
 
 /** 已打开仓库的基本信息。 */
 export interface RepoInfo {
@@ -126,13 +120,7 @@ export interface GraphPage {
 }
 
 /** 文件变更类别。 */
-export type ChangeType =
-  | "modified"
-  | "added"
-  | "deleted"
-  | "renamed"
-  | "binary"
-  | "untracked";
+export type ChangeType = "modified" | "added" | "deleted" | "renamed" | "binary" | "untracked";
 
 /** 单个文件的变更摘要。 */
 export interface ChangedFile {
@@ -204,9 +192,7 @@ export type DiffScopeKind = "commit" | "staged" | "workdir";
 
 /** diff 查询范围（get_file_diff 参数）。 */
 export type DiffScope =
-  | { kind: "commit"; commitId: string }
-  | { kind: "staged" }
-  | { kind: "workdir" };
+  { kind: "commit"; commitId: string } | { kind: "staged" } | { kind: "workdir" };
 
 /** AppError 序列化后的载荷（invoke reject 时收到）。 */
 export interface AppErrorPayload {

@@ -231,15 +231,21 @@ export function stashPush(repoId: string, message: string | null): Promise<GitAc
 }
 
 /** 应用或弹出指定贮藏条目。 */
-export function stashApply(
-  repoId: string,
-  index: number,
-  pop: boolean,
-): Promise<GitActionResult> {
+export function stashApply(repoId: string, index: number, pop: boolean): Promise<GitActionResult> {
   return invoke<GitActionResult>("stash_apply", { repoId, index, pop });
 }
 
 /** 删除指定贮藏条目。 */
 export function stashDrop(repoId: string, index: number): Promise<GitActionResult> {
   return invoke<GitActionResult>("stash_drop", { repoId, index });
+}
+
+/** 记录前端错误/告警日志到本地日志文件。 */
+export function logClientError(level: string, source: string, message: string): Promise<void> {
+  return invoke<void>("log_client_error", { level, source, message });
+}
+
+/** 获取本地日志文件路径。 */
+export function getLogFilePath(): Promise<string> {
+  return invoke<string>("get_log_file_path");
 }

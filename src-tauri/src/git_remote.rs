@@ -708,9 +708,7 @@ pub fn abort_operation(repo: &git2::Repository, workdir: &Path) -> AppResult<Git
 
 /// 解决冲突后继续进行中的合并 / 变基 / cherry-pick / revert。
 pub fn continue_operation(repo: &git2::Repository, workdir: &Path) -> AppResult<GitActionResult> {
-    let index = repo
-        .index()
-        .map_err(|e| AppError::Git(format!("读取 index 失败: {e}")))?;
+    let index = git_service::fresh_index(repo)?;
     if index.has_conflicts() {
         return Err(AppError::Git(
             "仍有未解决的冲突文件，请先解决冲突并标记为已解决".to_string(),
@@ -871,8 +869,7 @@ pub fn discard_file(repo: &git2::Repository, workdir: &Path, path: &str) -> AppR
         .and_then(|h| h.peel_to_tree().ok())
         .map(|tree| tree.get_path(rel).is_ok())
         .unwrap_or(false);
-    let in_index = repo
-        .index()
+    let in_index = git_service::fresh_index(repo)
         .ok()
         .map(|idx| idx.get_path(rel, 0).is_some())
         .unwrap_or(false);

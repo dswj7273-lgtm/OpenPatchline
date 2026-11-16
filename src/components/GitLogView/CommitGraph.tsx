@@ -197,8 +197,8 @@ interface CommitGraphProps {
 
 export function CommitGraph({ rows, graphWidth, scrollTop, viewportH }: CommitGraphProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const theme = useAppStore(s => s.theme);
-  const selectedCommitId = useAppStore(s => s.selectedCommitId);
+  const theme = useAppStore((s) => s.theme);
+  const selectedCommitId = useAppStore((s) => s.selectedCommitId);
 
   useEffect(() => {
     const raf = requestAnimationFrame(() =>
@@ -208,6 +208,11 @@ export function CommitGraph({ rows, graphWidth, scrollTop, viewportH }: CommitGr
   }, [rows, graphWidth, scrollTop, viewportH, theme, selectedCommitId]);
 
   return (
-    <canvas ref={canvasRef} className="commit-graph-canvas" role="img" aria-label="提交历史泳道图" />
+    <canvas
+      ref={canvasRef}
+      className="commit-graph-canvas"
+      role="img"
+      aria-label="提交历史泳道图"
+    />
   );
 }

@@ -20,7 +20,11 @@ import { AlertIcon } from "../Icons";
 import "./DiffView.css";
 import "../../highlighter/tokens.css";
 import DiffHeader, { type DiffMode } from "./DiffHeader";
-import SplitDiffGrid, { GOTO_CHANGE_EVENT, UnifiedGrid, type GotoChangeDetail } from "./SplitDiffGrid";
+import SplitDiffGrid, {
+  GOTO_CHANGE_EVENT,
+  UnifiedGrid,
+  type GotoChangeDetail,
+} from "./SplitDiffGrid";
 
 /** 把一侧全部行拼成完整文本（spacer 记为空行，行号 == 行下标）。 */
 function sideContent(rows: AlignedRow[], side: "left" | "right"): string {
@@ -81,7 +85,9 @@ export function DiffView() {
       if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "[" || e.key === "]")) {
         e.preventDefault();
         const direction: GotoChangeDetail["direction"] = e.key === "[" ? -1 : 1;
-        window.dispatchEvent(new CustomEvent<GotoChangeDetail>(GOTO_CHANGE_EVENT, { detail: { direction } }));
+        window.dispatchEvent(
+          new CustomEvent<GotoChangeDetail>(GOTO_CHANGE_EVENT, { detail: { direction } }),
+        );
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -89,7 +95,12 @@ export function DiffView() {
   }, []);
 
   const diffSides = useMemo(() => {
-    if (!currentFileDiff || currentFileDiff.isBinary || currentFileDiff.tooLarge || currentFileDiff.rows.length === 0) {
+    if (
+      !currentFileDiff ||
+      currentFileDiff.isBinary ||
+      currentFileDiff.tooLarge ||
+      currentFileDiff.rows.length === 0
+    ) {
       return null;
     }
     const { rows, newPath, oldPath } = currentFileDiff;

@@ -74,7 +74,9 @@ function CommitFileRow({ file, onClick }: { file: ChangedFile; onClick: () => vo
   const { dir, base } = splitPath(file.path);
   return (
     <button type="button" className={`cd-file cd-file--${file.changeType}`} onClick={onClick}>
-      <span className={`cd-file-badge badge-${file.changeType}`}>{CHANGE_LETTER[file.changeType]}</span>
+      <span className={`cd-file-badge badge-${file.changeType}`}>
+        {CHANGE_LETTER[file.changeType]}
+      </span>
       <span className="cd-file-path" title={file.path}>
         {dir && <span className="cd-file-dir">{dir}</span>}
         <span className="cd-file-base">{base}</span>
@@ -88,24 +90,24 @@ function CommitFileRow({ file, onClick }: { file: ChangedFile; onClick: () => vo
 }
 
 export function CommitDetail() {
-  const selectedCommitId = useAppStore(s => s.selectedCommitId);
-  const graphRows = useAppStore(s => s.graphRows);
-  const commitFiles = useAppStore(s => s.commitFiles);
-  const openFileDiff = useAppStore(s => s.openFileDiff);
-  const selectCommit = useAppStore(s => s.selectCommit);
-  const gitBusy = useAppStore(s => s.gitBusy);
-  const cherryPickCommit = useAppStore(s => s.cherryPickCommit);
-  const revertCommit = useAppStore(s => s.revertCommit);
-  const createBranch = useAppStore(s => s.createBranch);
-  const createTag = useAppStore(s => s.createTag);
-  const resetHead = useAppStore(s => s.resetHead);
+  const selectedCommitId = useAppStore((s) => s.selectedCommitId);
+  const graphRows = useAppStore((s) => s.graphRows);
+  const commitFiles = useAppStore((s) => s.commitFiles);
+  const openFileDiff = useAppStore((s) => s.openFileDiff);
+  const selectCommit = useAppStore((s) => s.selectCommit);
+  const gitBusy = useAppStore((s) => s.gitBusy);
+  const cherryPickCommit = useAppStore((s) => s.cherryPickCommit);
+  const revertCommit = useAppStore((s) => s.revertCommit);
+  const createBranch = useAppStore((s) => s.createBranch);
+  const createTag = useAppStore((s) => s.createTag);
+  const resetHead = useAppStore((s) => s.resetHead);
 
   const [copied, setCopied] = useState(false);
   const [inlineMode, setInlineMode] = useState<"branch" | "tag" | null>(null);
   const [inlineValue, setInlineValue] = useState("");
 
   const row = useMemo(
-    () => graphRows.find(r => r.commit.id === selectedCommitId) ?? null,
+    () => graphRows.find((r) => r.commit.id === selectedCommitId) ?? null,
     [graphRows, selectedCommitId],
   );
 
@@ -153,7 +155,7 @@ export function CommitDetail() {
   const busy = gitBusy !== null;
 
   const toggleInline = (mode: "branch" | "tag") => {
-    setInlineMode(prev => (prev === mode ? null : mode));
+    setInlineMode((prev) => (prev === mode ? null : mode));
     setInlineValue("");
   };
 
@@ -161,9 +163,7 @@ export function CommitDetail() {
     const val = inlineValue.trim();
     if (!val || busy || !inlineMode) return;
     const ok =
-      inlineMode === "branch"
-        ? await createBranch(val, c.id, true)
-        : await createTag(val, c.id);
+      inlineMode === "branch" ? await createBranch(val, c.id, true) : await createTag(val, c.id);
     if (ok) {
       setInlineMode(null);
       setInlineValue("");
@@ -185,12 +185,7 @@ export function CommitDetail() {
         </button>
       </div>
 
-      <button
-        type="button"
-        className="cd-hash"
-        onClick={copyId}
-        title="点击复制完整 Commit SHA"
-      >
+      <button type="button" className="cd-hash" onClick={copyId} title="点击复制完整 Commit SHA">
         <div className="cd-hash-row">
           <span className="cd-short">{c.shortId}</span>
           <span className={`cd-copy-pill${copied ? " is-copied" : ""}`}>
@@ -285,8 +280,8 @@ export function CommitDetail() {
             aria-label={inlineMode === "branch" ? "新分支名" : "新标签名"}
             value={inlineValue}
             disabled={busy}
-            onChange={e => setInlineValue(e.target.value)}
-            onKeyDown={e => {
+            onChange={(e) => setInlineValue(e.target.value)}
+            onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
                 void submitInline();

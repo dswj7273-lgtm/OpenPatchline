@@ -35,7 +35,10 @@
   background: color-mix(in oklch, var(--surface-1) 75%, var(--surface-0));
   color: var(--text-muted);
   cursor: text;
-  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .gitlog-omnibar:hover {
@@ -109,7 +112,9 @@
   color: var(--accent);
   opacity: 0.75;
   cursor: pointer;
-  transition: background 100ms ease, opacity 100ms ease;
+  transition:
+    background 100ms ease,
+    opacity 100ms ease;
 }
 
 .gitlog-token-remove:hover {
@@ -168,7 +173,9 @@
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 100ms ease, color 100ms ease;
+  transition:
+    background 100ms ease,
+    color 100ms ease;
 }
 
 .gitlog-omni-tool:hover,
@@ -250,7 +257,9 @@
   font-size: 11.5px;
   font-weight: 550;
   cursor: pointer;
-  transition: background 100ms ease, color 100ms ease;
+  transition:
+    background 100ms ease,
+    color 100ms ease;
 }
 
 .gitlog-omni-tab:hover {
@@ -306,7 +315,9 @@
   font-size: 12px;
   text-align: left;
   cursor: pointer;
-  transition: background 90ms ease, color 90ms ease;
+  transition:
+    background 90ms ease,
+    color 90ms ease;
 }
 
 .gitlog-omni-option.is-active,
@@ -370,7 +381,9 @@
   border-radius: 8px;
   background: color-mix(in oklch, var(--surface-1) 75%, var(--surface-0));
   overflow: hidden;
-  transition: border-color 140ms ease, background 140ms ease;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease;
 }
 
 .gitlog-action-group:hover {
@@ -392,7 +405,9 @@
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 110ms ease, color 110ms ease;
+  transition:
+    background 110ms ease,
+    color 110ms ease;
 }
 
 .gitlog-seg-btn + .gitlog-seg-btn {
@@ -419,7 +434,9 @@
   height: 13px;
   color: var(--text-muted);
   flex: none;
-  transition: color 110ms ease, transform 140ms ease;
+  transition:
+    color 110ms ease,
+    transform 140ms ease;
 }
 
 .gitlog-seg-btn:hover:not(:disabled) svg,
@@ -509,7 +526,9 @@
   font-weight: 550;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 100ms ease, color 100ms ease;
+  transition:
+    background 100ms ease,
+    color 100ms ease;
 }
 
 .gitlog-cmd-tab:hover {
@@ -552,7 +571,9 @@
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
-  transition: border-color 110ms ease, background 110ms ease;
+  transition:
+    border-color 110ms ease,
+    background 110ms ease;
 }
 
 .gitlog-cmd-item--full {
@@ -725,7 +746,10 @@
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
+  transition:
+    background 100ms ease,
+    border-color 100ms ease,
+    color 100ms ease;
 }
 
 .gitlog-mini-btn:hover:not(:disabled) {

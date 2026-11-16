@@ -115,7 +115,9 @@
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 110ms ease, color 110ms ease;
+  transition:
+    background 110ms ease,
+    color 110ms ease;
 }
 
 .diff-header__btn svg {
@@ -253,7 +255,9 @@
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 110ms ease, color 110ms ease;
+  transition:
+    background 110ms ease,
+    color 110ms ease;
 }
 
 .diff-header__mode button svg {
@@ -393,7 +397,9 @@
   font-size: 12px;
   text-align: left;
   cursor: pointer;
-  transition: background 100ms ease, color 100ms ease;
+  transition:
+    background 100ms ease,
+    color 100ms ease;
 }
 
 .diff-file-list__item:hover {
@@ -537,7 +543,10 @@
   border-radius: 999px;
   background: color-mix(in oklch, var(--text-muted) 38%, transparent);
   cursor: grab;
-  transition: background 120ms ease, top 120ms ease, height 120ms ease;
+  transition:
+    background 120ms ease,
+    top 120ms ease,
+    height 120ms ease;
 }
 
 .diff-hscroll:hover .diff-hscroll__thumb,
@@ -727,7 +736,9 @@
   border-radius: 2px;
   opacity: 0.78;
   cursor: pointer;
-  transition: opacity 100ms ease, transform 100ms ease;
+  transition:
+    opacity 100ms ease,
+    transform 100ms ease;
 }
 
 .diff-rail__marker:hover,

@@ -68,8 +68,7 @@ function buildSegments(
   let cur: Segment | null = null;
   for (let i = 0; i < content.length; i++) {
     while (ti < tokens.length && tokens[ti].end <= i) ti++;
-    const tokenClass =
-      ti < tokens.length && tokens[ti].start <= i ? tokens[ti].className : "";
+    const tokenClass = ti < tokens.length && tokens[ti].start <= i ? tokens[ti].className : "";
     while (ri < ranges.length && ranges[ri].end <= i) ri++;
     const inDiff = ri < ranges.length && ranges[ri].start <= i;
     const text = content[i] === "\t" ? " ".repeat(TAB_WIDTH) : content[i];
