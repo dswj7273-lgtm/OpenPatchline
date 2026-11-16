@@ -7,6 +7,16 @@
  *   `#[serde(rename_all = "camelCase")]` 一一对应。
  */
 
+/** 仓库所处的操作状态（用于感知合并 / 变基 / 挑选 / 撤销冲突）。 */
+export type RepoState =
+  | "clean"
+  | "merging"
+  | "rebasing"
+  | "cherryPicking"
+  | "reverting"
+  | "bisecting"
+  | "applying";
+
 /** 已打开仓库的基本信息。 */
 export interface RepoInfo {
   /** 仓库唯一标识：workdir 根路径 canonicalize 后的绝对路径。 */
@@ -18,6 +28,16 @@ export interface RepoInfo {
   headBranch: string | null;
   /** HEAD 提交 id；空仓库时为空字符串。 */
   headCommit: string;
+  /** 仓库当前操作状态。 */
+  state: RepoState;
+}
+
+/** 最近打开的仓库记录。 */
+export interface RecentRepo {
+  id: string;
+  path: string;
+  name: string;
+  lastOpenedAt: number;
 }
 
 /** 目录扫描发现的子仓库（openRepository 返回 notARepo 时的候选项）。 */
@@ -171,11 +191,12 @@ export interface FileDiffResult {
   deletions: number;
 }
 
-/** 工作区单个文件的状态（staged / unstaged 两栏）。 */
+/** 工作区单个文件的状态（staged / unstaged / conflicted）。 */
 export interface FileStatus {
   path: string;
   staged: ChangeType | null;
   unstaged: ChangeType | null;
+  conflicted: boolean;
 }
 
 /** diff 范围类别。 */
@@ -249,6 +270,14 @@ export interface StashEntry {
 export interface GitActionResult {
   output: string;
   repo: RepoInfo;
+}
+
+/** 远程操作实时进度事件载荷。 */
+export interface GitProgressEvent {
+  repoId: string;
+  op: string;
+  message: string;
+  percent: number | null;
 }
 
 /** reset_head 模式。 */

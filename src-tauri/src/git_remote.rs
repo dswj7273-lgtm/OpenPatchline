@@ -5,28 +5,32 @@
 //! 应用内重新实现认证。读操作（分支列表等）仍走 git2-rs。
 //!
 //! 约定：
-//! - 子进程设置 `GIT_TERMINAL_PROMPT=0`：GUI 进程没有终端，凭证提示
-//!   与其挂死不如快速失败（Keychain / ssh-agent 认证不受影响）；
+//! - 子进程设置 `GIT_TERMINAL_PROMPT=0` 与 `GIT_EDITOR=true`：GUI 进程
+//!   没有终端，避免凭证提示或编辑器挂死；
 //! - pull 固定 `--no-edit`：避免无终端环境下合并提交信息编辑器挂起；
 //! - 显式传入的远程名必须是仓库已配置的远程，防止 `--all` /
 //!   `--upload-pack=…` 等以选项形式注入 git 参数；
 //! - 输出按 `\r`/`\n` 拆行规整（fetch 进度以 `\r` 刷新会产生大量行），
 //!   并截断到尾部若干行，防止巨型载荷走 IPC；
-//! - **已知权衡**：子进程无超时，且期间持有该仓库的条目锁——网络
-//!   黑洞（TCP 不超时）会让该仓库的后续操作一直排队，需重启应用
-//!   恢复。MVP 接受该权衡（标准库实现带管道排水的超时.kill 复杂度
-//!   高、易引入管道死锁）；`GIT_TERMINAL_PROMPT=0` 已消除最常见的
-//!   凭证提示挂死。
+//! - 远程操作支持流式读取 stderr 进度行与按 `repo_id` 取消（向子进程组发送
+//!   SIGTERM/SIGKILL，立即中止 git 及其 ssh/http 辅助进程）。
 
+use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Component, Path};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::error::{AppError, AppResult};
 use crate::git_service;
-use crate::types::{FetchResult, GitActionResult, PullResult, PushResult, StashEntry};
+use crate::types::{FetchResult, GitActionResult, PullResult, PushResult, RepoState, StashEntry};
 
 /// 返回给前端的输出摘要行数上限。
 const MAX_OUTPUT_LINES: usize = 50;
+/// 流式进度事件最小发送间隔（避免高频 `\r` 刷爆 IPC）。
+const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(80);
 /// 提交签名回退用户名（仓库与全局配置均缺失时）。
 const FALLBACK_SIGNATURE_NAME: &str = "OpenPatchline";
 const FALLBACK_SIGNATURE_EMAIL: &str = "openpatchline@local";
@@ -35,30 +39,283 @@ const FALLBACK_SIGNATURE_EMAIL: &str = "openpatchline@local";
 /// PATH，Homebrew 安装的 git 可能不在默认 PATH 里；依次回退常见位置。
 const GIT_BIN_CANDIDATES: &[&str] = &["git", "/opt/homebrew/bin/git", "/usr/local/bin/git"];
 
-/// 在 `workdir` 下运行 `git <args..>` 子进程，返回原始 `(stdout, stderr)`。
-fn run_git_raw(workdir: &Path, args: &[&str]) -> AppResult<(String, String)> {
-    let output = 'spawn: {
-        for bin in GIT_BIN_CANDIDATES {
-            match Command::new(bin)
-                .current_dir(workdir)
-                .args(args)
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .output()
-            {
-                Ok(output) => break 'spawn output,
-                // 候选不存在（NotFound）→ 尝试下一个；其他错误（权限等）如实上报。
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(AppError::Io(format!("启动 git 子进程失败: {e}"))),
+static NEXT_OP_ID: AtomicU64 = AtomicU64::new(1);
+
+struct ActiveRemoteProcess {
+    op_id: u64,
+    cancelled: Arc<AtomicBool>,
+    child: Arc<Mutex<Option<Child>>>,
+}
+
+/// 跟踪各仓库正在执行的远程 git 子进程，支持无锁等待的即时取消。
+#[derive(Clone, Default)]
+pub struct RemoteOpManager {
+    active: Arc<Mutex<HashMap<String, ActiveRemoteProcess>>>,
+}
+
+impl RemoteOpManager {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn register(
+        &self,
+        repo_id: &str,
+        child: Child,
+    ) -> (u64, Arc<AtomicBool>, Arc<Mutex<Option<Child>>>) {
+        let op_id = NEXT_OP_ID.fetch_add(1, Ordering::Relaxed);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let child_arc = Arc::new(Mutex::new(Some(child)));
+        self.active
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(
+                repo_id.to_string(),
+                ActiveRemoteProcess {
+                    op_id,
+                    cancelled: Arc::clone(&cancelled),
+                    child: Arc::clone(&child_arc),
+                },
+            );
+        (op_id, cancelled, child_arc)
+    }
+
+    fn unregister(&self, repo_id: &str, op_id: u64) {
+        let mut map = self.active.lock().unwrap_or_else(|p| p.into_inner());
+        if map.get(repo_id).is_some_and(|p| p.op_id == op_id) {
+            map.remove(repo_id);
+        }
+    }
+
+    /// 中止指定仓库正在运行的远程子进程（及 Unix 进程组中的辅助进程）。
+    pub fn cancel(&self, repo_id: &str) -> bool {
+        let entry = {
+            let map = self.active.lock().unwrap_or_else(|p| p.into_inner());
+            map.get(repo_id)
+                .map(|p| (Arc::clone(&p.cancelled), Arc::clone(&p.child)))
+        };
+        let Some((cancelled, child_arc)) = entry else {
+            return false;
+        };
+        cancelled.store(true, Ordering::SeqCst);
+        let mut guard = child_arc.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(child) = guard.as_mut() {
+            terminate_process_tree(child);
+        }
+        true
+    }
+}
+
+/// 终止子进程及其子孙进程组，避免 ssh / git-remote-https 残留持有管道。
+fn terminate_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pgid = format!("-{}", child.id());
+        let _ = Command::new("/bin/kill").args(["-TERM", &pgid]).status();
+        std::thread::sleep(Duration::from_millis(80));
+        if matches!(child.try_wait(), Ok(None)) {
+            let _ = Command::new("/bin/kill").args(["-KILL", &pgid]).status();
+            let _ = child.kill();
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+}
+
+struct ActiveOpGuard<'a> {
+    manager: &'a RemoteOpManager,
+    repo_id: String,
+    op_id: u64,
+}
+
+impl Drop for ActiveOpGuard<'_> {
+    fn drop(&mut self) {
+        self.manager.unregister(&self.repo_id, self.op_id);
+    }
+}
+
+/// 远程流式执行上下文（进度回调 + 取消管理器）。
+pub struct RemoteProgress<'a> {
+    pub manager: &'a RemoteOpManager,
+    pub repo_id: &'a str,
+    pub on_line: &'a (dyn Fn(&str, Option<u8>) + Send + Sync),
+}
+
+/// 从 git 进度行提取百分比（如 `"Receiving objects:  45% (9/20)"` → `Some(45)`）。
+pub fn parse_progress_percent(line: &str) -> Option<u8> {
+    let pct_idx = line.find('%')?;
+    let digits = line[..pct_idx]
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        return None;
+    }
+    let val = digits
+        .chars()
+        .rev()
+        .collect::<String>()
+        .parse::<u8>()
+        .ok()?;
+    (val <= 100).then_some(val)
+}
+
+/// 启动 `git <args..>` 子进程，配置非交互环境变量与独立进程组。
+fn spawn_git_command(workdir: &Path, args: &[&str]) -> AppResult<Child> {
+    for bin in GIT_BIN_CANDIDATES {
+        let mut cmd = Command::new(bin);
+        cmd.current_dir(workdir)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_EDITOR", "true")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        match cmd.spawn() {
+            Ok(child) => return Ok(child),
+            // 候选不存在（NotFound）→ 尝试下一个；其他错误（权限等）如实上报。
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(AppError::Io(format!("启动 git 子进程失败: {e}"))),
+        }
+    }
+    Err(AppError::Io(format!(
+        "找不到 git 可执行文件（已尝试 {}）；请安装 git CLI（xcode-select --install）",
+        GIT_BIN_CANDIDATES.join(", "),
+    )))
+}
+
+/// 流式读取字节流并按 `\r`/`\n` 分行回调，同时收集完整原始字节。
+fn drain_stream<R: Read>(mut reader: R, mut on_line: impl FnMut(&str)) -> Vec<u8> {
+    let mut all = Vec::new();
+    let mut line_buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while let Ok(n) = reader.read(&mut chunk) {
+        if n == 0 {
+            break;
+        }
+        all.extend_from_slice(&chunk[..n]);
+        for &b in &chunk[..n] {
+            if b == b'\r' || b == b'\n' {
+                if !line_buf.is_empty() {
+                    let s = String::from_utf8_lossy(&line_buf);
+                    let trimmed = s.trim();
+                    if !trimmed.is_empty() {
+                        on_line(trimmed);
+                    }
+                    line_buf.clear();
+                }
+            } else {
+                line_buf.push(b);
             }
         }
-        return Err(AppError::Io(format!(
-            "找不到 git 可执行文件（已尝试 {}）；请安装 git CLI（xcode-select --install）",
-            GIT_BIN_CANDIDATES.join(", "),
-        )));
+    }
+    if !line_buf.is_empty() {
+        let s = String::from_utf8_lossy(&line_buf);
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            on_line(trimmed);
+        }
+    }
+    all
+}
+
+/// 在 `workdir` 下运行 `git <args..>` 子进程，可选流式读取进度与取消支持。
+fn run_git_raw_with(
+    workdir: &Path,
+    args: &[&str],
+    progress: Option<RemoteProgress<'_>>,
+) -> AppResult<(String, String)> {
+    let mut child = spawn_git_command(workdir, args)?;
+    let Some(progress) = progress else {
+        let output = child
+            .wait_with_output()
+            .map_err(|e| AppError::Io(format!("等待 git 子进程失败: {e}")))?;
+        return finish_git_output(
+            args,
+            output.status.success(),
+            output.stdout,
+            output.stderr,
+            false,
+        );
     };
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if !output.status.success() {
+
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+    let (op_id, cancelled, child_arc) = progress.manager.register(progress.repo_id, child);
+    let _guard = ActiveOpGuard {
+        manager: progress.manager,
+        repo_id: progress.repo_id.to_string(),
+        op_id,
+    };
+
+    let last_emit = Mutex::new(Instant::now() - PROGRESS_EMIT_INTERVAL);
+    let emit_line = |line: &str| {
+        let pct = parse_progress_percent(line);
+        let force = pct == Some(100) || line.ends_with("done.");
+        let mut guard = last_emit.lock().unwrap_or_else(|p| p.into_inner());
+        if force || guard.elapsed() >= PROGRESS_EMIT_INTERVAL {
+            *guard = Instant::now();
+            drop(guard);
+            (progress.on_line)(line, pct);
+        }
+    };
+
+    let (stdout_bytes, stderr_bytes) = std::thread::scope(|s| {
+        let t_out = s.spawn(|| match stdout_pipe {
+            Some(r) => drain_stream(r, |_| {}),
+            None => Vec::new(),
+        });
+        let t_err = s.spawn(|| match stderr_pipe {
+            Some(r) => drain_stream(r, |line| emit_line(line)),
+            None => Vec::new(),
+        });
+        (
+            t_out.join().unwrap_or_default(),
+            t_err.join().unwrap_or_default(),
+        )
+    });
+
+    let status = {
+        let mut guard = child_arc.lock().unwrap_or_else(|p| p.into_inner());
+        match guard.take() {
+            Some(mut c) => c
+                .wait()
+                .map_err(|e| AppError::Io(format!("等待 git 子进程失败: {e}")))?,
+            None => {
+                return Err(AppError::Unexpected("子进程句柄丢失".to_string()));
+            }
+        }
+    };
+
+    finish_git_output(
+        args,
+        status.success(),
+        stdout_bytes,
+        stderr_bytes,
+        cancelled.load(Ordering::SeqCst),
+    )
+}
+
+fn finish_git_output(
+    args: &[&str],
+    success: bool,
+    stdout_bytes: Vec<u8>,
+    stderr_bytes: Vec<u8>,
+    was_cancelled: bool,
+) -> AppResult<(String, String)> {
+    if was_cancelled {
+        return Err(AppError::Cancelled);
+    }
+    let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
+    if !success {
         let detail = if stderr.trim().is_empty() {
             stdout.trim()
         } else {
@@ -73,6 +330,11 @@ fn run_git_raw(workdir: &Path, args: &[&str]) -> AppResult<(String, String)> {
     Ok((stdout, stderr))
 }
 
+/// 在 `workdir` 下运行 `git <args..>` 子进程，返回原始 `(stdout, stderr)`。
+fn run_git_raw(workdir: &Path, args: &[&str]) -> AppResult<(String, String)> {
+    run_git_raw_with(workdir, args, None)
+}
+
 /// 在 `workdir` 下运行 `git <args..>` 子进程。
 ///
 /// 成功返回规整后的 stdout+stderr；失败（非零退出）返回携带 stderr
@@ -80,6 +342,15 @@ fn run_git_raw(workdir: &Path, args: &[&str]) -> AppResult<(String, String)> {
 /// 把错误打到 stdout）。
 fn run_git(workdir: &Path, args: &[&str]) -> AppResult<String> {
     let (stdout, stderr) = run_git_raw(workdir, args)?;
+    Ok(normalize_output(&stdout, &stderr))
+}
+
+fn run_git_streaming(
+    workdir: &Path,
+    args: &[&str],
+    progress: Option<RemoteProgress<'_>>,
+) -> AppResult<String> {
+    let (stdout, stderr) = run_git_raw_with(workdir, args, progress)?;
     Ok(normalize_output(&stdout, &stderr))
 }
 
@@ -161,8 +432,22 @@ pub fn fetch(
     workdir: &Path,
     remote: Option<&str>,
 ) -> AppResult<FetchResult> {
+    fetch_with_progress(repo, workdir, remote, None)
+}
+
+/// 流式拉取（支持进度推送与取消）。
+pub fn fetch_with_progress(
+    repo: &git2::Repository,
+    workdir: &Path,
+    remote: Option<&str>,
+    progress: Option<RemoteProgress<'_>>,
+) -> AppResult<FetchResult> {
     let remote_name = default_remote(repo, remote)?;
-    let output = run_git(workdir, &["fetch", "--prune", &remote_name])?;
+    let output = run_git_streaming(
+        workdir,
+        &["fetch", "--progress", "--prune", &remote_name],
+        progress,
+    )?;
     Ok(FetchResult {
         remote: remote_name,
         output,
@@ -193,20 +478,21 @@ fn pull_strategy_configured(repo: &git2::Repository) -> bool {
 }
 
 /// 拉取并合并到当前分支（pull）：遵循仓库 pull.rebase / merge 配置。
-///
-/// - `--no-edit` 阻止合并提交信息编辑器在无终端环境下挂起；
-/// - 未配置任何 pull 策略时追加 `--ff`（见 [`pull_strategy_configured`]），
-///   避免新版 git 对发散分支直接失败；
-/// - 冲突 / 无上游 / 网络失败等由 git 以非零退出报告，stderr 摘要
-///   随 [`AppError::Git`] 返回（注意：冲突的 pull 已把冲突标记写入
-///   工作区并留下 MERGE_HEAD，由前端刷新状态呈现）；
-/// - 成功后重新读取仓库信息（HEAD 可能已移动）。
 pub fn pull(repo: &git2::Repository, workdir: &Path) -> AppResult<PullResult> {
-    let mut args: Vec<&str> = vec!["pull", "--no-edit"];
+    pull_with_progress(repo, workdir, None)
+}
+
+/// 流式拉取并合并到当前分支（支持进度推送与取消）。
+pub fn pull_with_progress(
+    repo: &git2::Repository,
+    workdir: &Path,
+    progress: Option<RemoteProgress<'_>>,
+) -> AppResult<PullResult> {
+    let mut args: Vec<&str> = vec!["pull", "--progress", "--no-edit"];
     if !pull_strategy_configured(repo) {
         args.push("--ff");
     }
-    let output = run_git(workdir, &args)?;
+    let output = run_git_streaming(workdir, &args, progress)?;
     let repo_info = git_service::repo_info(repo)?;
     Ok(PullResult {
         output,
@@ -214,17 +500,13 @@ pub fn pull(repo: &git2::Repository, workdir: &Path) -> AppResult<PullResult> {
     })
 }
 
-/// 推送当前分支（push）。
-///
-/// - 当前分支已配置上游 → `git push`；
-/// - 无上游但存在远程 → `git push --set-upstream <remote> <branch>`
-///   （推送同时建立跟踪，与 IDEA 的默认行为一致）；
-/// - 分离 HEAD / 空仓库 / 无远程直接报 [`AppError::InvalidArg`] /
-///   [`AppError::NotFound`]；
-/// - 非快进被拒（远端有新提交）等由 git 以非零退出报告，stderr 摘要
-///   随 [`AppError::Git`] 返回；不提供强制推送（--force）。
-pub fn push(repo: &git2::Repository, workdir: &Path) -> AppResult<PushResult> {
-    // HEAD 必须在分支上（分离 HEAD / unborn 无法确定推送目标）。
+/// 构造推送当前分支的公共逻辑（支持 `--force-with-lease` 等附加参数）。
+fn push_branch_with(
+    repo: &git2::Repository,
+    workdir: &Path,
+    extra_flag: Option<&str>,
+    progress: Option<RemoteProgress<'_>>,
+) -> AppResult<PushResult> {
     let branch = repo
         .head()
         .ok()
@@ -237,22 +519,33 @@ pub fn push(repo: &git2::Repository, workdir: &Path) -> AppResult<PushResult> {
         .and_then(|b| b.upstream().ok())
         .is_some();
     let remote_name = default_remote(repo, None)?;
-    let args: Vec<&str> = if has_upstream {
-        vec!["push"]
-    } else {
-        vec![
-            "push",
-            "--set-upstream",
-            remote_name.as_str(),
-            branch.as_str(),
-        ]
-    };
-    let output = run_git(workdir, &args)?;
+    let mut args: Vec<&str> = vec!["push", "--progress"];
+    if let Some(flag) = extra_flag {
+        args.push(flag);
+    }
+    if !has_upstream {
+        args.extend(["--set-upstream", remote_name.as_str(), branch.as_str()]);
+    }
+    let output = run_git_streaming(workdir, &args, progress)?;
     let repo_info = git_service::repo_info(repo)?;
     Ok(PushResult {
         output,
         repo: repo_info,
     })
+}
+
+/// 推送当前分支（push）。
+pub fn push(repo: &git2::Repository, workdir: &Path) -> AppResult<PushResult> {
+    push_with_progress(repo, workdir, None)
+}
+
+/// 流式推送当前分支（支持进度推送与取消）。
+pub fn push_with_progress(
+    repo: &git2::Repository,
+    workdir: &Path,
+    progress: Option<RemoteProgress<'_>>,
+) -> AppResult<PushResult> {
+    push_branch_with(repo, workdir, None, progress)
 }
 
 /// 校验普通引用/参数非空且不以 `-` 开头，防止注入 git CLI 选项。
@@ -310,19 +603,45 @@ fn action_result(repo: &git2::Repository, output: String) -> AppResult<GitAction
 
 /// 从全部已配置远程拉取并清理失效远程分支（`git fetch --all --prune`）。
 pub fn fetch_all(repo: &git2::Repository, workdir: &Path) -> AppResult<GitActionResult> {
+    fetch_all_with_progress(repo, workdir, None)
+}
+
+/// 流式拉取全部远程（支持进度推送与取消）。
+pub fn fetch_all_with_progress(
+    repo: &git2::Repository,
+    workdir: &Path,
+    progress: Option<RemoteProgress<'_>>,
+) -> AppResult<GitActionResult> {
     let names = remote_names(repo)?;
     if names.is_empty() {
         return Err(AppError::NotFound(
             "仓库没有配置远程（remote），无法拉取".to_string(),
         ));
     }
-    let output = run_git(workdir, &["fetch", "--all", "--prune"])?;
+    let output = run_git_streaming(
+        workdir,
+        &["fetch", "--all", "--prune", "--progress"],
+        progress,
+    )?;
     action_result(repo, output)
 }
 
 /// 使用 rebase + autostash 策略拉取并重放当前分支（`git pull --rebase --autostash --no-edit`）。
 pub fn pull_rebase(repo: &git2::Repository, workdir: &Path) -> AppResult<PullResult> {
-    let output = run_git(workdir, &["pull", "--rebase", "--autostash", "--no-edit"])?;
+    pull_rebase_with_progress(repo, workdir, None)
+}
+
+/// 流式 rebase 拉取（支持进度推送与取消）。
+pub fn pull_rebase_with_progress(
+    repo: &git2::Repository,
+    workdir: &Path,
+    progress: Option<RemoteProgress<'_>>,
+) -> AppResult<PullResult> {
+    let output = run_git_streaming(
+        workdir,
+        &["pull", "--rebase", "--autostash", "--no-edit", "--progress"],
+        progress,
+    )?;
     let repo_info = git_service::repo_info(repo)?;
     Ok(PullResult {
         output,
@@ -332,30 +651,35 @@ pub fn pull_rebase(repo: &git2::Repository, workdir: &Path) -> AppResult<PullRes
 
 /// 安全强推当前分支（`git push --force-with-lease`；无上游时自动 `--set-upstream`）。
 pub fn push_force_with_lease(repo: &git2::Repository, workdir: &Path) -> AppResult<PushResult> {
-    let branch = repo
-        .head()
-        .ok()
-        .filter(|h| h.is_branch())
-        .and_then(|h| h.shorthand().ok().map(str::to_string))
-        .ok_or_else(|| AppError::InvalidArg("分离 HEAD 或空仓库，无法推送".to_string()))?;
-    let has_upstream = repo
-        .find_branch(&branch, git2::BranchType::Local)
-        .ok()
-        .and_then(|b| b.upstream().ok())
-        .is_some();
+    push_force_with_lease_with_progress(repo, workdir, None)
+}
+
+/// 流式安全强推当前分支（支持进度推送与取消）。
+pub fn push_force_with_lease_with_progress(
+    repo: &git2::Repository,
+    workdir: &Path,
+    progress: Option<RemoteProgress<'_>>,
+) -> AppResult<PushResult> {
+    push_branch_with(repo, workdir, Some("--force-with-lease"), progress)
+}
+
+/// 推送所有本地标签到默认远程（`git push <remote> --tags`）。
+pub fn push_tags(repo: &git2::Repository, workdir: &Path) -> AppResult<PushResult> {
+    push_tags_with_progress(repo, workdir, None)
+}
+
+/// 流式推送所有本地标签（支持进度推送与取消）。
+pub fn push_tags_with_progress(
+    repo: &git2::Repository,
+    workdir: &Path,
+    progress: Option<RemoteProgress<'_>>,
+) -> AppResult<PushResult> {
     let remote_name = default_remote(repo, None)?;
-    let args: Vec<&str> = if has_upstream {
-        vec!["push", "--force-with-lease"]
-    } else {
-        vec![
-            "push",
-            "--force-with-lease",
-            "--set-upstream",
-            remote_name.as_str(),
-            branch.as_str(),
-        ]
-    };
-    let output = run_git(workdir, &args)?;
+    let output = run_git_streaming(
+        workdir,
+        &["push", "--progress", remote_name.as_str(), "--tags"],
+        progress,
+    )?;
     let repo_info = git_service::repo_info(repo)?;
     Ok(PushResult {
         output,
@@ -363,15 +687,47 @@ pub fn push_force_with_lease(repo: &git2::Repository, workdir: &Path) -> AppResu
     })
 }
 
-/// 推送所有本地标签到默认远程（`git push <remote> --tags`）。
-pub fn push_tags(repo: &git2::Repository, workdir: &Path) -> AppResult<PushResult> {
-    let remote_name = default_remote(repo, None)?;
-    let output = run_git(workdir, &["push", remote_name.as_str(), "--tags"])?;
-    let repo_info = git_service::repo_info(repo)?;
-    Ok(PushResult {
-        output,
-        repo: repo_info,
-    })
+/// 中止进行中的合并 / 变基 / cherry-pick / revert，恢复到操作前状态。
+pub fn abort_operation(repo: &git2::Repository, workdir: &Path) -> AppResult<GitActionResult> {
+    let args: &[&str] = match git_service::repo_state(repo) {
+        RepoState::Merging => &["merge", "--abort"],
+        RepoState::Rebasing => &["rebase", "--abort"],
+        RepoState::CherryPicking => &["cherry-pick", "--abort"],
+        RepoState::Reverting => &["revert", "--abort"],
+        RepoState::Applying => &["am", "--abort"],
+        RepoState::Bisecting => &["bisect", "reset"],
+        RepoState::Clean => {
+            return Err(AppError::InvalidArg(
+                "当前仓库没有进行中的合并、变基或挑选操作".to_string(),
+            ));
+        }
+    };
+    let output = run_git(workdir, args)?;
+    action_result(repo, output)
+}
+
+/// 解决冲突后继续进行中的合并 / 变基 / cherry-pick / revert。
+pub fn continue_operation(repo: &git2::Repository, workdir: &Path) -> AppResult<GitActionResult> {
+    let index = repo
+        .index()
+        .map_err(|e| AppError::Git(format!("读取 index 失败: {e}")))?;
+    if index.has_conflicts() {
+        return Err(AppError::Git(
+            "仍有未解决的冲突文件，请先解决冲突并标记为已解决".to_string(),
+        ));
+    }
+    let args: &[&str] = match git_service::repo_state(repo) {
+        RepoState::Merging => &["merge", "--continue"],
+        RepoState::Rebasing => &["rebase", "--continue"],
+        RepoState::CherryPicking => &["cherry-pick", "--continue"],
+        RepoState::Reverting => &["revert", "--continue"],
+        RepoState::Applying => &["am", "--continue"],
+        RepoState::Clean | RepoState::Bisecting => {
+            return Err(AppError::InvalidArg("当前仓库没有可继续的操作".to_string()));
+        }
+    };
+    let output = run_git_with_signature(repo, workdir, args)?;
+    action_result(repo, output)
 }
 
 /// 新建本地分支（可选基于 `start_point` 并立即切换）。
@@ -479,7 +835,7 @@ pub fn reset_head(
         other => {
             return Err(AppError::InvalidArg(format!(
                 "不支持的 reset 模式: {other}（可选：soft / mixed / hard）"
-            )))
+            )));
         }
     };
     let rev = validate_target_ref(repo, target, "重置目标")?;
@@ -499,9 +855,12 @@ pub fn discard_file(repo: &git2::Repository, workdir: &Path, path: &str) -> AppR
     }
     let rel = Path::new(path);
     if rel.is_absolute()
-        || rel
-            .components()
-            .any(|c| matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
+        || rel.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
     {
         return Err(AppError::InvalidArg(format!("非法相对路径: {path}")));
     }
@@ -1082,7 +1441,8 @@ mod tests {
         let dir = fx.workdir();
 
         // create_branch & checkout
-        let res = create_branch(&fx.work, &dir, "topic/ui", None, true).expect("create_branch 失败");
+        let res =
+            create_branch(&fx.work, &dir, "topic/ui", None, true).expect("create_branch 失败");
         assert_eq!(res.repo.head_branch.as_deref(), Some("topic/ui"));
 
         // commit + amend
@@ -1120,7 +1480,10 @@ mod tests {
         assert!(!dir.join("untracked.txt").exists());
         std::fs::write(dir.join("topic.txt"), "dirty\n").unwrap();
         discard_file(&fx.work, &dir, "topic.txt").expect("discard tracked 失败");
-        assert_eq!(std::fs::read_to_string(dir.join("topic.txt")).unwrap(), "v1\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("topic.txt")).unwrap(),
+            "v1\n"
+        );
 
         // checkout main branch, merge topic/ui, revert, reset, delete_branch
         let main_branch = fx.branch.clone();
@@ -1149,5 +1512,106 @@ mod tests {
             reset_head(&fx.work, &dir, "HEAD", "unknown"),
             Err(AppError::InvalidArg(_))
         ));
+    }
+
+    #[test]
+    fn parse_progress_percent_extracts_percentages() {
+        assert_eq!(
+            parse_progress_percent("Receiving objects:  45% (9/20)"),
+            Some(45)
+        );
+        assert_eq!(
+            parse_progress_percent("Resolving deltas: 100% (12/12), done."),
+            Some(100)
+        );
+        assert_eq!(
+            parse_progress_percent("Enumerating objects: 10, done."),
+            None
+        );
+        assert_eq!(parse_progress_percent("weird 150%"), None);
+    }
+
+    #[test]
+    fn conflict_abort_and_continue_for_merge_cherry_pick_and_rebase() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        let base_oid = commit_file(&repo, "a.txt", "base\n", "base");
+        let branch = repo.head().unwrap().shorthand().unwrap().to_string();
+
+        // 创建 topic 分支并制造冲突提交
+        let base_commit = repo
+            .find_commit(git2::Oid::from_str(&base_oid).unwrap())
+            .unwrap();
+        repo.branch("topic", &base_commit, false).unwrap();
+        drop(base_commit);
+        run_git(dir.path(), &["checkout", "topic"]).unwrap();
+        let topic_oid = commit_file(&repo, "a.txt", "topic\n", "topic edit");
+
+        run_git(dir.path(), &["checkout", &branch]).unwrap();
+        let main_oid = commit_file(&repo, "a.txt", "main\n", "main edit");
+
+        // 1. merge 冲突 → abort_operation 恢复 Clean
+        assert!(merge_branch(&repo, dir.path(), "topic").is_err());
+        assert_eq!(git_service::repo_state(&repo), RepoState::Merging);
+        let aborted = abort_operation(&repo, dir.path()).expect("merge abort 失败");
+        assert_eq!(aborted.repo.state, RepoState::Clean);
+        assert_eq!(aborted.repo.head_commit, main_oid);
+
+        // 2. merge 冲突 → 解决 + 暂存 → continue_operation 完成双亲合并
+        assert!(merge_branch(&repo, dir.path(), "topic").is_err());
+        assert!(
+            continue_operation(&repo, dir.path()).is_err(),
+            "未解决冲突不得 continue"
+        );
+        std::fs::write(dir.path().join("a.txt"), "merged\n").unwrap();
+        run_git(dir.path(), &["add", "a.txt"]).unwrap();
+        let continued = continue_operation(&repo, dir.path()).expect("merge continue 失败");
+        assert_eq!(continued.repo.state, RepoState::Clean);
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.parent_count(), 2);
+
+        // 重置回 main_oid 再测 cherry-pick
+        reset_head(&repo, dir.path(), &main_oid, "hard").unwrap();
+        assert!(cherry_pick_commit(&repo, dir.path(), &topic_oid).is_err());
+        assert_eq!(git_service::repo_state(&repo), RepoState::CherryPicking);
+        abort_operation(&repo, dir.path()).expect("cherry-pick abort 失败");
+        assert_eq!(git_service::repo_state(&repo), RepoState::Clean);
+
+        assert!(cherry_pick_commit(&repo, dir.path(), &topic_oid).is_err());
+        std::fs::write(dir.path().join("a.txt"), "picked\n").unwrap();
+        run_git(dir.path(), &["add", "a.txt"]).unwrap();
+        let cp_ok = continue_operation(&repo, dir.path()).expect("cherry-pick continue 失败");
+        assert_eq!(cp_ok.repo.state, RepoState::Clean);
+
+        // 重置到 topic 分支并 rebase 到 main 上产生冲突 → 解决并 continue
+        run_git(dir.path(), &["checkout", "topic"]).unwrap();
+        let rebase_res = run_git(dir.path(), &["rebase", &branch]);
+        assert!(rebase_res.is_err());
+        assert_eq!(git_service::repo_state(&repo), RepoState::Rebasing);
+        std::fs::write(dir.path().join("a.txt"), "rebased\n").unwrap();
+        run_git(dir.path(), &["add", "a.txt"]).unwrap();
+        let rb_ok = continue_operation(&repo, dir.path()).expect("rebase continue 失败");
+        assert_eq!(rb_ok.repo.state, RepoState::Clean);
+    }
+
+    #[test]
+    fn remote_op_manager_cancels_running_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = RemoteOpManager::new();
+        let mut cmd = Command::new("sleep");
+        cmd.arg("10").current_dir(dir.path());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        let child = cmd.spawn().expect("spawn sleep");
+        let (_id, cancelled, child_arc) = manager.register("repo-1", child);
+        assert!(manager.cancel("repo-1"));
+        assert!(cancelled.load(Ordering::SeqCst));
+        if let Some(mut c) = child_arc.lock().unwrap().take() {
+            let _ = c.wait();
+        }
+        assert!(!manager.cancel("missing-repo"));
     }
 }

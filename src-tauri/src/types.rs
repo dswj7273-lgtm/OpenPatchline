@@ -10,6 +10,19 @@
 
 use serde::{Deserialize, Serialize};
 
+/// 仓库所处的操作状态（用于感知合并 / 变基 / 挑选 / 撤销冲突）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RepoState {
+    Clean,
+    Merging,
+    Rebasing,
+    CherryPicking,
+    Reverting,
+    Bisecting,
+    Applying,
+}
+
 /// 已打开仓库的基本信息（命令 `pick_and_open_repository` 的返回值）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +37,19 @@ pub struct RepoInfo {
     pub head_branch: Option<String>,
     /// HEAD 指向的提交 id；空仓库时为空字符串。
     pub head_commit: String,
+    /// 仓库当前的操作状态（Clean / Merging / Rebasing / CherryPicking / Reverting 等）。
+    pub state: RepoState,
+}
+
+/// 最近打开的仓库记录（持久化于 app data 目录）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentRepo {
+    pub id: String,
+    pub path: String,
+    pub name: String,
+    /// 最近打开时间，Unix 时间戳（秒）。
+    pub last_opened_at: i64,
 }
 
 /// `pick_and_open_repository` 的返回结果（tagged enum，`kind` 字段区分）。
@@ -273,15 +299,17 @@ pub struct FileDiffResult {
     pub deletions: u32,
 }
 
-/// 工作区单个文件的状态（staged / unstaged 两栏）。
+/// 工作区单个文件的状态（staged / unstaged / conflicted）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileStatus {
     pub path: String,
-    /// 暂存区 vs HEAD 的状态；未暂存任何变更时为 None。
+    /// 暂存区 vs HEAD 的状态；未暂存任何变更或处于冲突态时为 None。
     pub staged: Option<ChangeType>,
-    /// 工作区 vs 暂存区的状态；含未跟踪文件（Some(Untracked)）。
+    /// 工作区 vs 暂存区的状态；含未跟踪文件（Some(Untracked)）；冲突态时为 None。
     pub unstaged: Option<ChangeType>,
+    /// 是否存在未解决的合并冲突（index 存在 stage 1/2/3）。
+    pub conflicted: bool,
 }
 
 /// 分支类别。
@@ -363,6 +391,19 @@ pub struct GitActionResult {
     pub output: String,
     /// 操作后的仓库信息。
     pub repo: RepoInfo,
+}
+
+/// 远程操作实时进度事件载荷（事件名 `git_remote_progress`）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitProgressEvent {
+    pub repo_id: String,
+    /// 操作类型：`"fetch"` | `"pull"` | `"push"`。
+    pub op: String,
+    /// 最新一条进度输出行。
+    pub message: String,
+    /// 从输出中解析到的百分比（0..=100），无法解析时为 None。
+    pub percent: Option<u8>,
 }
 
 /// diff 范围类别（命令参数）。

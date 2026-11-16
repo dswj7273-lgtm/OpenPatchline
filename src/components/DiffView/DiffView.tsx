@@ -7,8 +7,13 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { extensionOf } from "../../highlighter/languages";
-import { tokenize, type TokenSpan } from "../../highlighter/tokenizer";
+import { extensionOf } from "../../highlighter/extensions";
+import {
+  EMPTY_SIDE_TOKENS,
+  getCachedHighlight,
+  requestHighlight,
+  type SideTokens,
+} from "../../highlighter/workerClient";
 import { useAppStore } from "../../store/app";
 import type { AlignedRow } from "../../types";
 import { AlertIcon } from "../Icons";
@@ -16,14 +21,6 @@ import "./DiffView.css";
 import "../../highlighter/tokens.css";
 import DiffHeader, { type DiffMode } from "./DiffHeader";
 import SplitDiffGrid, { GOTO_CHANGE_EVENT, UnifiedGrid, type GotoChangeDetail } from "./SplitDiffGrid";
-
-/** 单文件两侧的逐行 token（下标与 AlignedRow 一致）。 */
-interface SideTokens {
-  left: TokenSpan[][];
-  right: TokenSpan[][];
-}
-
-const EMPTY_SIDE_TOKENS: SideTokens = { left: [], right: [] };
 
 /** 把一侧全部行拼成完整文本（spacer 记为空行，行号 == 行下标）。 */
 function sideContent(rows: AlignedRow[], side: "left" | "right"): string {
@@ -91,15 +88,39 @@ export function DiffView() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const tokens = useMemo<SideTokens>(() => {
-    if (!currentFileDiff) return EMPTY_SIDE_TOKENS;
+  const diffSides = useMemo(() => {
+    if (!currentFileDiff || currentFileDiff.isBinary || currentFileDiff.tooLarge || currentFileDiff.rows.length === 0) {
+      return null;
+    }
     const { rows, newPath, oldPath } = currentFileDiff;
-    const langId = extensionOf(newPath ?? oldPath ?? "");
     return {
-      left: tokenize(sideContent(rows, "left"), langId),
-      right: tokenize(sideContent(rows, "right"), langId),
+      left: sideContent(rows, "left"),
+      right: sideContent(rows, "right"),
+      langId: extensionOf(newPath ?? oldPath ?? ""),
     };
   }, [currentFileDiff]);
+
+  const [asyncTokens, setAsyncTokens] = useState<{ key: object | null; value: SideTokens }>({
+    key: null,
+    value: EMPTY_SIDE_TOKENS,
+  });
+
+  // 同步命中缓存时立即返回，切回已访问文件无闪烁；未命中时交给 Worker 异步分词并支持取消。
+  const cachedTokens = useMemo(() => {
+    if (!diffSides) return EMPTY_SIDE_TOKENS;
+    return getCachedHighlight(diffSides.left, diffSides.right, diffSides.langId);
+  }, [diffSides]);
+
+  useEffect(() => {
+    if (!currentFileDiff || !diffSides || cachedTokens !== null) return;
+    const key = currentFileDiff;
+    return requestHighlight(diffSides.left, diffSides.right, diffSides.langId, (res) => {
+      setAsyncTokens({ key, value: res });
+    });
+  }, [currentFileDiff, diffSides, cachedTokens]);
+
+  const tokens: SideTokens =
+    cachedTokens ?? (asyncTokens.key === currentFileDiff ? asyncTokens.value : EMPTY_SIDE_TOKENS);
 
   if (!currentFileDiff) {
     return (
@@ -133,6 +154,12 @@ export function DiffView() {
         <div className="diff-view__banner" role="status">
           <AlertIcon />
           <span>文件过大，仅显示部分差异内容</span>
+        </div>
+      )}
+      {!tooLarge && tokens.degraded && (
+        <div className="diff-view__banner" role="status">
+          <AlertIcon />
+          <span>文件行数或单行长度超出阈值，已对语法高亮进行部分/纯文本降级以保持滚动流畅</span>
         </div>
       )}
       <div className="diff-view__body">

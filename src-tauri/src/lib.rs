@@ -18,6 +18,7 @@ pub mod error;
 pub mod git_remote;
 pub mod git_service;
 pub mod graph;
+pub mod recent_repos;
 pub mod repo_manager;
 pub mod types;
 pub mod watcher;
@@ -30,8 +31,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(repo_manager::RepoManager::new())
+        .manage(git_remote::RemoteOpManager::new())
         .invoke_handler(tauri::generate_handler![
             commands::pick_and_open_repository,
+            commands::get_repo_info,
+            commands::get_recent_repositories,
+            commands::remove_recent_repository,
             commands::get_commit_graph,
             commands::get_commit_files,
             commands::get_file_diff,
@@ -48,9 +53,12 @@ pub fn run() {
             commands::pull_rebase_repository,
             commands::push_force_with_lease_repository,
             commands::push_tags_repository,
+            commands::cancel_remote_operation,
             commands::create_branch,
             commands::delete_branch,
             commands::merge_branch,
+            commands::abort_operation,
+            commands::continue_operation,
             commands::create_tag,
             commands::cherry_pick_commit,
             commands::revert_commit,

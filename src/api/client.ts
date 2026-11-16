@@ -19,6 +19,7 @@ import type {
   OpenRepositoryOutcome,
   PullResult,
   PushResult,
+  RecentRepo,
   RepoInfo,
   ResetMode,
   StashEntry,
@@ -31,6 +32,21 @@ import type {
  */
 export function openRepository(path: string): Promise<OpenRepositoryOutcome> {
   return invoke<OpenRepositoryOutcome>("pick_and_open_repository", { path });
+}
+
+/** 读取已打开仓库的最新元数据（分支 / HEAD / 冲突状态）。 */
+export function getRepoInfo(repoId: string): Promise<RepoInfo> {
+  return invoke<RepoInfo>("get_repo_info", { repoId });
+}
+
+/** 获取最近打开的仓库列表（后端自动清理失效路径）。 */
+export function getRecentRepositories(): Promise<RecentRepo[]> {
+  return invoke<RecentRepo[]>("get_recent_repositories");
+}
+
+/** 从最近仓库列表中移除指定路径。 */
+export function removeRecentRepository(path: string): Promise<RecentRepo[]> {
+  return invoke<RecentRepo[]>("remove_recent_repository", { path });
 }
 
 /** 分页读取提交图；cursor 为上一页最后一条 commit id（首页传 null）。 */
@@ -122,6 +138,11 @@ export function pushTagsRepository(repoId: string): Promise<PushResult> {
   return invoke<PushResult>("push_tags_repository", { repoId });
 }
 
+/** 取消指定仓库正在执行的远程操作。 */
+export function cancelRemoteOperation(repoId: string): Promise<boolean> {
+  return invoke<boolean>("cancel_remote_operation", { repoId });
+}
+
 /** 创建本地分支（可选基于 startPoint 与立即切换）。 */
 export function createBranch(
   repoId: string,
@@ -144,6 +165,16 @@ export function deleteBranch(
 /** 合并指定分支到当前分支。 */
 export function mergeBranch(repoId: string, name: string): Promise<GitActionResult> {
   return invoke<GitActionResult>("merge_branch", { repoId, name });
+}
+
+/** 中止进行中的合并 / 变基 / cherry-pick / revert。 */
+export function abortOperation(repoId: string): Promise<GitActionResult> {
+  return invoke<GitActionResult>("abort_operation", { repoId });
+}
+
+/** 解决冲突后继续进行中的合并 / 变基 / cherry-pick / revert。 */
+export function continueOperation(repoId: string): Promise<GitActionResult> {
+  return invoke<GitActionResult>("continue_operation", { repoId });
 }
 
 /** 创建标签。 */

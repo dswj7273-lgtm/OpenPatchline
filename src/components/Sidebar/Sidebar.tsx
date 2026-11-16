@@ -76,7 +76,9 @@ function makeChangedFile(entry: FileStatus, side: "staged" | "unstaged"): Change
   return {
     path: entry.path,
     oldPath: null,
-    changeType: (side === "staged" ? entry.staged : entry.unstaged) ?? "modified",
+    changeType:
+      (side === "staged" ? entry.staged : entry.unstaged) ??
+      (entry.conflicted ? "modified" : "modified"),
     additions: 0,
     deletions: 0,
   };
@@ -147,6 +149,7 @@ function FileGroup({
   title,
   count,
   accentCount,
+  conflictGroup,
   open,
   onToggle,
   batchLabel,
@@ -157,6 +160,7 @@ function FileGroup({
   title: string;
   count: number;
   accentCount?: boolean;
+  conflictGroup?: boolean;
   open: boolean;
   onToggle: () => void;
   batchLabel?: string;
@@ -165,12 +169,16 @@ function FileGroup({
   children: ReactNode;
 }) {
   return (
-    <section className="sidebar-group">
+    <section className={`sidebar-group${conflictGroup ? " sidebar-group--conflict" : ""}`}>
       <div className="sidebar-group-bar">
         <button type="button" className="sidebar-group-header" aria-expanded={open} onClick={onToggle}>
           <ChevronRightIcon className={`sidebar-caret${open ? " is-open" : ""}`} />
           <span className="sidebar-group-title">{title}</span>
-          <span className={`sidebar-group-count${accentCount && count > 0 ? " is-accent" : ""}`}>{count}</span>
+          <span
+            className={`sidebar-group-count${accentCount && count > 0 ? " is-accent" : ""}${conflictGroup && count > 0 ? " is-conflict" : ""}`}
+          >
+            {count}
+          </span>
         </button>
         {count > 0 && onBatchAction && batchLabel && (
           <button
@@ -214,28 +222,39 @@ function FileRow({
   onToggleStage: () => void;
   onDiscard?: () => void;
 }) {
+  const isConflict = entry.conflicted;
   const changeType = (side === "staged" ? entry.staged : entry.unstaged) ?? "modified";
-  const sideLabel = changeType === "untracked" ? "未跟踪" : side === "staged" ? "已暂存" : "未暂存";
+  const sideLabel = isConflict
+    ? "存在冲突"
+    : changeType === "untracked"
+      ? "未跟踪"
+      : side === "staged"
+        ? "已暂存"
+        : "未暂存";
+  const letter = isConflict ? "C" : CHANGE_LETTER[changeType];
+  const label = isConflict ? "合并冲突（解决后点击右侧标记为已解决）" : CHANGE_LABEL[changeType];
   const { dir, base } = splitPath(entry.path);
   return (
-    <div className={`sidebar-file sidebar-file--${changeType}${active ? " is-active" : ""}`}>
+    <div
+      className={`sidebar-file sidebar-file--${isConflict ? "conflicted" : changeType}${active ? " is-active" : ""}`}
+    >
       <button
         type="button"
         className="sidebar-file-open"
         style={{ paddingLeft: `${8 + depth * 14}px` }}
-        title={`${entry.path}\n${CHANGE_LABEL[changeType]} · ${sideLabel}`}
-        aria-label={`${entry.path}，${CHANGE_LABEL[changeType]}，${sideLabel}`}
+        title={`${entry.path}\n${label} · ${sideLabel}`}
+        aria-label={`${entry.path}，${label}，${sideLabel}`}
         onClick={onOpen}
       >
-        <span className={`sidebar-file-status badge-${changeType}`} title={CHANGE_LABEL[changeType]}>
-          {CHANGE_LETTER[changeType]}
+        <span className={`sidebar-file-status badge-${isConflict ? "conflicted" : changeType}`} title={label}>
+          {letter}
         </span>
         <span className="sidebar-file-path">
           {showDir && dir && <span className="sidebar-file-dir">{dir}</span>}
           <span className="sidebar-file-base">{base}</span>
         </span>
       </button>
-      {side === "unstaged" && onDiscard && (
+      {side === "unstaged" && !isConflict && onDiscard && (
         <button
           type="button"
           className="icon-btn sidebar-stage-btn sidebar-discard-btn"
@@ -250,11 +269,17 @@ function FileRow({
       <button
         type="button"
         className="icon-btn sidebar-stage-btn"
-        aria-label={side === "staged" ? `取消暂存 ${entry.path}` : `暂存 ${entry.path}`}
-        title={side === "staged" ? "取消暂存" : "暂存"}
+        aria-label={
+          isConflict
+            ? `标记已解决并暂存 ${entry.path}`
+            : side === "staged"
+              ? `取消暂存 ${entry.path}`
+              : `暂存 ${entry.path}`
+        }
+        title={isConflict ? "标记为已解决并暂存" : side === "staged" ? "取消暂存" : "暂存"}
         onClick={onToggleStage}
       >
-        {side === "staged" ? <MinusIcon /> : <PlusIcon />}
+        {isConflict ? <CheckIcon /> : side === "staged" ? <MinusIcon /> : <PlusIcon />}
       </button>
     </div>
   );
@@ -607,6 +632,7 @@ export function Sidebar() {
   const [resizing, setResizing] = useState(false);
   const dragStartRef = useRef<{ x: number; w: number } | null>(null);
 
+  const [conflictsOpen, setConflictsOpen] = useState(true);
   const [stagedOpen, setStagedOpen] = useState(true);
   const [changesOpen, setChangesOpen] = useState(true);
   const [untrackedOpen, setUntrackedOpen] = useState(false);
@@ -644,13 +670,21 @@ export function Sidebar() {
     setResizing(false);
   };
 
-  const staged = useMemo(() => fileStatus.filter(f => f.staged !== null), [fileStatus]);
-  const unstagedTracked = useMemo(
-    () => fileStatus.filter(f => f.unstaged !== null && f.unstaged !== "untracked"),
+  const conflicted = useMemo(() => fileStatus.filter(f => f.conflicted), [fileStatus]);
+  const staged = useMemo(
+    () => fileStatus.filter(f => !f.conflicted && f.staged !== null),
     [fileStatus],
   );
-  const untracked = useMemo(() => fileStatus.filter(f => f.unstaged === "untracked"), [fileStatus]);
+  const unstagedTracked = useMemo(
+    () => fileStatus.filter(f => !f.conflicted && f.unstaged !== null && f.unstaged !== "untracked"),
+    [fileStatus],
+  );
+  const untracked = useMemo(
+    () => fileStatus.filter(f => !f.conflicted && f.unstaged === "untracked"),
+    [fileStatus],
+  );
 
+  const conflictTree = useMemo(() => buildTree(conflicted), [conflicted]);
   const stagedTree = useMemo(() => buildTree(staged), [staged]);
   const changesTree = useMemo(() => buildTree(unstagedTracked), [unstagedTracked]);
   const untrackedTree = useMemo(() => buildTree(untracked), [untracked]);
@@ -673,9 +707,13 @@ export function Sidebar() {
     void openFileDiff(scope, [makeChangedFile(entry, side)], 0);
   };
 
+  const hasConflicts = conflicted.length > 0;
+  const isRebasing = repo?.state === "rebasing";
   const canSubmit =
     !busy &&
     gitBusy === null &&
+    !hasConflicts &&
+    !isRebasing &&
     Boolean(message.trim()) &&
     (amend ? Boolean(repo?.headCommit) : staged.length > 0);
 
@@ -744,6 +782,31 @@ export function Sidebar() {
         </div>
 
         <div className="sidebar-groups">
+          {conflicted.length > 0 && (
+            <FileGroup
+              title="冲突文件"
+              count={conflicted.length}
+              conflictGroup
+              open={conflictsOpen}
+              onToggle={() => setConflictsOpen(v => !v)}
+              batchLabel="标记全部冲突文件为已解决并暂存"
+              batchIcon={<CheckIcon />}
+              onBatchAction={() => void stageFiles(conflicted.map(f => f.path))}
+            >
+              <TreeView
+                node={conflictTree}
+                depth={0}
+                side="unstaged"
+                expanded={expandedDirs}
+                activePath={activeWorkdirPath}
+                onToggleDir={toggleDir}
+                onOpenFile={f => openEntry(f, "unstaged")}
+                onStageDir={(_, paths) => void stageFiles(paths)}
+                onStageFile={p => void stageFile(p)}
+              />
+            </FileGroup>
+          )}
+
           <FileGroup
             title="已暂存"
             count={staged.length}
@@ -848,11 +911,18 @@ export function Sidebar() {
               <input
                 type="checkbox"
                 checked={amend}
-                disabled={busy || !repo?.headCommit}
+                disabled={busy || hasConflicts || isRebasing || !repo?.headCommit}
                 onChange={e => toggleAmend(e.target.checked)}
               />
               <span>修正上次提交 (Amend)</span>
             </label>
+            {(hasConflicts || isRebasing) && (
+              <p className="sidebar-commit-hint" role="status">
+                {hasConflicts
+                  ? `存在 ${conflicted.length} 个冲突文件，解决并标记后方可继续`
+                  : "变基中，请在顶部横幅点击「继续」完成变基"}
+              </p>
+            )}
             <div className="sidebar-commit-actions">
               <span className="sidebar-commit-meta">
                 <span className={`sidebar-commit-staged${staged.length > 0 ? " has-staged" : ""}`}>

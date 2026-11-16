@@ -15,7 +15,9 @@ import type {
   DiffScope,
   FileDiffResult,
   FileStatus,
+  GitProgressEvent,
   LogFilter,
+  RecentRepo,
   RepoInfo,
   ResetMode,
   StashEntry,
@@ -35,6 +37,7 @@ export type GitBusy =
   | "checkout"
   | "branch"
   | "merge"
+  | "conflict"
   | "tag"
   | "cherryPick"
   | "revert"
@@ -89,6 +92,13 @@ function toErrorMessage(e: unknown): string {
   return String(e);
 }
 
+/** 判断是否为后端主动取消错误（AppError::Cancelled）。 */
+function isCancelledError(e: unknown): boolean {
+  return Boolean(
+    e && typeof e === "object" && "code" in e && (e as { code: unknown }).code === "cancelled",
+  );
+}
+
 /** 取 git 输出的最后一行作为通知摘要（"Already up to date." 等）。 */
 function lastOutputLine(output: string): string | null {
   const line = output
@@ -129,10 +139,28 @@ export interface AppState {
   stashes: StashEntry[];
   /** 进行中的 git 操作（null = 空闲）；进行中禁用相关按钮。 */
   gitBusy: GitBusy;
+  /** 最近打开的仓库列表。 */
+  recentRepos: RecentRepo[];
+  /** 远程操作实时进度（fetch / pull / push 进行中）。 */
+  remoteProgress: { op: string; message: string; percent: number | null } | null;
 
   // ---- 动作 ----
   /** 打开仓库（path 为目录选择框起始建议，缺省传空字符串）。 */
   openRepo: (path?: string) => Promise<void>;
+  /** 刷新当前仓库元数据（分支 / HEAD / 冲突状态）。 */
+  refreshRepoInfo: () => Promise<void>;
+  /** 加载最近打开仓库列表（含后端失效路径清理）。 */
+  loadRecentRepos: () => Promise<void>;
+  /** 从最近列表中移除指定路径或 id。 */
+  removeRecentRepo: (path: string) => Promise<void>;
+  /** 取消正在进行的远程操作。 */
+  cancelRemoteOp: () => Promise<void>;
+  /** 更新实时远程进度。 */
+  setRemoteProgress: (ev: GitProgressEvent) => void;
+  /** 中止进行中的合并 / 变基 / cherry-pick / revert。 */
+  abortOperation: () => Promise<void>;
+  /** 解决冲突后继续进行中的合并 / 变基 / cherry-pick / revert。 */
+  continueOperation: () => Promise<void>;
   /** 关闭「不是仓库」候选弹层。 */
   dismissRepoCandidates: () => void;
   /** 追加加载下一页提交。 */
@@ -236,6 +264,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   branchesLoading: false,
   stashes: [],
   gitBusy: null,
+  recentRepos: [],
+  remoteProgress: null,
 
   openRepo: async (path) => {
     set({ graphLoading: true, error: null, notice: null, repoCandidates: null });
@@ -269,15 +299,127 @@ export const useAppStore = create<AppState>()((set, get) => ({
         stashes: [],
         // 防御：上个仓库的远程操作若仍在飞行，新会话不得继承忙碌态。
         gitBusy: null,
+        remoteProgress: null,
       });
       await get().reloadGraph();
       await get().loadFileStatus();
       await get().loadBranches();
       await get().loadStashes();
+      void get().loadRecentRepos();
     } catch (e) {
       set({ error: toErrorMessage(e) });
+      if (path) void get().loadRecentRepos();
     } finally {
       set({ graphLoading: false });
+    }
+  },
+
+  refreshRepoInfo: async () => {
+    const { repo } = get();
+    if (!repo) return;
+    const repoId = repo.id;
+    try {
+      const info = await api.getRepoInfo(repoId);
+      if (get().repo?.id === repoId) {
+        set({ repo: info });
+      }
+    } catch {
+      /* 忽略刷新异常，由主操作捕获 */
+    }
+  },
+
+  loadRecentRepos: async () => {
+    try {
+      const recentRepos = await api.getRecentRepositories();
+      set({ recentRepos });
+    } catch {
+      /* 忽略持久化读取异常 */
+    }
+  },
+
+  removeRecentRepo: async (path) => {
+    try {
+      const recentRepos = await api.removeRecentRepository(path);
+      set({ recentRepos });
+    } catch (e) {
+      set({ error: toErrorMessage(e) });
+    }
+  },
+
+  cancelRemoteOp: async () => {
+    const { repo } = get();
+    if (!repo) return;
+    try {
+      await api.cancelRemoteOperation(repo.id);
+    } catch (e) {
+      set({ error: toErrorMessage(e) });
+    }
+  },
+
+  setRemoteProgress: (ev) => {
+    const { repo, gitBusy } = get();
+    if (!repo || ev.repoId !== repo.id) return;
+    if (gitBusy !== "fetch" && gitBusy !== "pull" && gitBusy !== "push") return;
+    set({
+      remoteProgress: {
+        op: ev.op,
+        message: ev.message,
+        percent: ev.percent,
+      },
+    });
+  },
+
+  abortOperation: async () => {
+    const { repo, gitBusy } = get();
+    if (!repo) return set({ error: "No repository open" });
+    if (gitBusy !== null) return;
+    const repoId = repo.id;
+    set({ gitBusy: "conflict", error: null, notice: null });
+    try {
+      const res = await api.abortOperation(repoId);
+      if (get().repo?.id !== repoId) return;
+      set({ repo: res.repo, selectedCommitId: null, commitFiles: [] });
+      await get().loadFileStatus();
+      await get().reloadGraph();
+      await get().loadBranches();
+      if (get().error === null) {
+        set({ notice: "已中止当前操作并恢复工作区" });
+      }
+    } catch (e) {
+      if (get().repo?.id !== repoId) return;
+      set({ error: toErrorMessage(e) });
+      await get().refreshRepoInfo();
+      await get().loadFileStatus();
+    } finally {
+      set({ gitBusy: null });
+    }
+  },
+
+  continueOperation: async () => {
+    const { repo, gitBusy } = get();
+    if (!repo) return set({ error: "No repository open" });
+    if (gitBusy !== null) return;
+    const repoId = repo.id;
+    set({ gitBusy: "conflict", error: null, notice: null });
+    try {
+      const res = await api.continueOperation(repoId);
+      if (get().repo?.id !== repoId) return;
+      set({ repo: res.repo, selectedCommitId: null, commitFiles: [] });
+      await get().loadFileStatus();
+      await get().reloadGraph();
+      await get().loadBranches();
+      if (get().error === null) {
+        set({ notice: res.repo.state === "clean" ? "已完成操作" : "已推进到下一步" });
+      }
+    } catch (e) {
+      if (get().repo?.id !== repoId) return;
+      set({ error: toErrorMessage(e) });
+      await get().refreshRepoInfo();
+      await get().loadFileStatus();
+      await get().reloadGraph();
+      await get().loadBranches();
+    } finally {
+      set({ gitBusy: null });
     }
   },
 
@@ -485,8 +627,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
     try {
       await api.createCommit(repo.id, message);
+      await get().refreshRepoInfo();
       await get().loadFileStatus();
       await get().reloadGraph();
+      await get().loadBranches();
     } catch (e) {
       set({ error: toErrorMessage(e) });
     }
@@ -555,7 +699,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
     if (gitBusy !== null) return;
     const repoId = repo.id;
-    set({ gitBusy: "fetch", error: null, notice: null });
+    set({ gitBusy: "fetch", remoteProgress: null, error: null, notice: null });
     try {
       const result = await api.fetchRepository(repoId, null);
       if (get().repo?.id !== repoId) return;
@@ -569,9 +713,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
         });
       }
     } catch (e) {
-      if (get().repo?.id === repoId) set({ error: toErrorMessage(e) });
+      if (get().repo?.id === repoId) {
+        if (isCancelledError(e)) set({ notice: "已取消获取远程" });
+        else set({ error: toErrorMessage(e) });
+      }
     } finally {
-      set({ gitBusy: null });
+      set({ gitBusy: null, remoteProgress: null });
     }
   },
 
@@ -583,7 +730,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
     if (gitBusy !== null) return;
     const repoId = repo.id;
-    set({ gitBusy: "pull", error: null, notice: null });
+    set({ gitBusy: "pull", remoteProgress: null, error: null, notice: null });
     try {
       const result = await api.pullRepository(repoId);
       if (get().repo?.id !== repoId) return;
@@ -602,14 +749,19 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
     } catch (e) {
       if (get().repo?.id !== repoId) return;
+      if (isCancelledError(e)) {
+        set({ notice: "已取消拉取" });
+        return;
+      }
       set({ error: toErrorMessage(e) });
       // 冲突的 pull 虽失败，但远程引用已更新、工作区已写入冲突标记：
-      // 仍刷新各视图，把真实状态呈现给用户。
+      // 仍刷新各视图与 repo.state，把真实状态呈现给用户。
+      await get().refreshRepoInfo();
       await get().loadFileStatus();
       await get().reloadGraph();
       await get().loadBranches();
     } finally {
-      set({ gitBusy: null });
+      set({ gitBusy: null, remoteProgress: null });
     }
   },
 
@@ -621,7 +773,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
     if (gitBusy !== null) return;
     const repoId = repo.id;
-    set({ gitBusy: "push", error: null, notice: null });
+    set({ gitBusy: "push", remoteProgress: null, error: null, notice: null });
     try {
       const result = await api.pushRepository(repoId);
       if (get().repo?.id !== repoId) return;
@@ -634,9 +786,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
         set({ notice: `推送完成${summary ? `：${summary}` : ""}` });
       }
     } catch (e) {
-      if (get().repo?.id === repoId) set({ error: toErrorMessage(e) });
+      if (get().repo?.id === repoId) {
+        if (isCancelledError(e)) set({ notice: "已取消推送" });
+        else set({ error: toErrorMessage(e) });
+      }
     } finally {
-      set({ gitBusy: null });
+      set({ gitBusy: null, remoteProgress: null });
     }
   },
 
@@ -656,7 +811,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!repo) return set({ error: "No repository open" });
     if (gitBusy !== null) return;
     const repoId = repo.id;
-    set({ gitBusy: "fetch", error: null, notice: null });
+    set({ gitBusy: "fetch", remoteProgress: null, error: null, notice: null });
     try {
       const res = await api.fetchAllRemotes(repoId);
       if (get().repo?.id !== repoId) return;
@@ -668,9 +823,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
         set({ notice: `已获取全部远程${summary ? `：${summary}` : ""}` });
       }
     } catch (e) {
-      if (get().repo?.id === repoId) set({ error: toErrorMessage(e) });
+      if (get().repo?.id === repoId) {
+        if (isCancelledError(e)) set({ notice: "已取消获取远程" });
+        else set({ error: toErrorMessage(e) });
+      }
     } finally {
-      set({ gitBusy: null });
+      set({ gitBusy: null, remoteProgress: null });
     }
   },
 
@@ -679,7 +837,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!repo) return set({ error: "No repository open" });
     if (gitBusy !== null) return;
     const repoId = repo.id;
-    set({ gitBusy: "pull", error: null, notice: null });
+    set({ gitBusy: "pull", remoteProgress: null, error: null, notice: null });
     try {
       const res = await api.pullRebaseRepository(repoId);
       if (get().repo?.id !== repoId) return;
@@ -693,12 +851,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
     } catch (e) {
       if (get().repo?.id !== repoId) return;
+      if (isCancelledError(e)) {
+        set({ notice: "已取消变基拉取" });
+        return;
+      }
       set({ error: toErrorMessage(e) });
+      await get().refreshRepoInfo();
       await get().loadFileStatus();
       await get().reloadGraph();
       await get().loadBranches();
     } finally {
-      set({ gitBusy: null });
+      set({ gitBusy: null, remoteProgress: null });
     }
   },
 
@@ -707,7 +870,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!repo) return set({ error: "No repository open" });
     if (gitBusy !== null) return;
     const repoId = repo.id;
-    set({ gitBusy: "push", error: null, notice: null });
+    set({ gitBusy: "push", remoteProgress: null, error: null, notice: null });
     try {
       const res = await api.pushForceWithLeaseRepository(repoId);
       if (get().repo?.id !== repoId) return;
@@ -719,9 +882,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
         set({ notice: `安全强推完成${summary ? `：${summary}` : ""}` });
       }
     } catch (e) {
-      if (get().repo?.id === repoId) set({ error: toErrorMessage(e) });
+      if (get().repo?.id === repoId) {
+        if (isCancelledError(e)) set({ notice: "已取消推送" });
+        else set({ error: toErrorMessage(e) });
+      }
     } finally {
-      set({ gitBusy: null });
+      set({ gitBusy: null, remoteProgress: null });
     }
   },
 
@@ -730,7 +896,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!repo) return set({ error: "No repository open" });
     if (gitBusy !== null) return;
     const repoId = repo.id;
-    set({ gitBusy: "push", error: null, notice: null });
+    set({ gitBusy: "push", remoteProgress: null, error: null, notice: null });
     try {
       const res = await api.pushTagsRepository(repoId);
       if (get().repo?.id !== repoId) return;
@@ -741,9 +907,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
         set({ notice: `标签推送完成${summary ? `：${summary}` : ""}` });
       }
     } catch (e) {
-      if (get().repo?.id === repoId) set({ error: toErrorMessage(e) });
+      if (get().repo?.id === repoId) {
+        if (isCancelledError(e)) set({ notice: "已取消推送标签" });
+        else set({ error: toErrorMessage(e) });
+      }
     } finally {
-      set({ gitBusy: null });
+      set({ gitBusy: null, remoteProgress: null });
     }
   },
 
@@ -816,6 +985,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     } catch (e) {
       if (get().repo?.id !== repoId) return;
       set({ error: toErrorMessage(e) });
+      await get().refreshRepoInfo();
       await get().loadFileStatus();
       await get().reloadGraph();
       await get().loadBranches();
@@ -870,6 +1040,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     } catch (e) {
       if (get().repo?.id !== repoId) return;
       set({ error: toErrorMessage(e) });
+      await get().refreshRepoInfo();
       await get().loadFileStatus();
       await get().reloadGraph();
     } finally {
@@ -896,6 +1067,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     } catch (e) {
       if (get().repo?.id !== repoId) return;
       set({ error: toErrorMessage(e) });
+      await get().refreshRepoInfo();
       await get().loadFileStatus();
       await get().reloadGraph();
     } finally {

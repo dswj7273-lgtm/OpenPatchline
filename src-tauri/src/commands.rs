@@ -24,20 +24,24 @@
 
 use std::path::PathBuf;
 
-use tauri::State;
+use tauri::{Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::error::{AppError, AppResult};
-use crate::git_remote;
+use crate::git_remote::{self, RemoteOpManager, RemoteProgress};
 use crate::git_service;
 use crate::graph;
+use crate::recent_repos;
 use crate::repo_manager::{RepoManager, lock_entry};
 use crate::types::{
     BranchInfo, ChangedFile, DiffScope, DiffScopeKind, FetchResult, FileDiffResult, FileStatus,
-    GitActionResult, GraphPage, LogFilter, OpenRepositoryOutcome, PullResult, PushResult, RepoInfo,
-    StashEntry,
+    GitActionResult, GitProgressEvent, GraphPage, LogFilter, OpenRepositoryOutcome, PullResult,
+    PushResult, RecentRepo, RepoInfo, StashEntry,
 };
 use crate::watcher::RepoWatcher;
+
+/// 远程操作实时进度事件名。
+const GIT_REMOTE_PROGRESS_EVENT: &str = "git_remote_progress";
 
 /// 提交图默认分页大小（调用方未显式传 limit 时）。
 const DEFAULT_GRAPH_PAGE_SIZE: usize = 200;
@@ -87,6 +91,15 @@ pub async fn pick_and_open_repository(
                         eprintln!("[watcher] 监听 {} 失败: {e}", repo.id);
                     }
                 }
+                if let Ok(file) = recent_repos::recent_repos_file(&app)
+                    && let Err(e) = recent_repos::record_recent_repo(
+                        &file,
+                        &repo,
+                        recent_repos::now_unix_secs(),
+                    )
+                {
+                    eprintln!("[recent_repos] 记录最近仓库失败: {e}");
+                }
                 Ok(OpenRepositoryOutcome::Opened { repo })
             }
             Err(AppError::NotFound(_)) => {
@@ -101,6 +114,46 @@ pub async fn pick_and_open_repository(
             }
             Err(e) => Err(e),
         }
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 读取已打开仓库的最新元数据（分支 / HEAD / 冲突操作状态）。
+#[tauri::command]
+pub async fn get_repo_info(state: State<'_, RepoManager>, repo_id: String) -> AppResult<RepoInfo> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<RepoInfo> {
+        let entry = lock_entry(&entry);
+        git_service::repo_info(&entry.repo)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 获取最近打开的仓库列表（自动清理失效路径）。
+#[tauri::command]
+pub async fn get_recent_repositories(app: tauri::AppHandle) -> AppResult<Vec<RecentRepo>> {
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<Vec<RecentRepo>> {
+        let file = recent_repos::recent_repos_file(&app)?;
+        recent_repos::load_recent_repos(&file)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 从最近仓库列表中移除指定路径或 id。
+#[tauri::command]
+pub async fn remove_recent_repository(
+    app: tauri::AppHandle,
+    path: String,
+) -> AppResult<Vec<RecentRepo>> {
+    if path.trim().is_empty() {
+        return Err(AppError::InvalidArg("path 不能为空".to_string()));
+    }
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<Vec<RecentRepo>> {
+        let file = recent_repos::recent_repos_file(&app)?;
+        recent_repos::remove_recent_repo(&file, path.trim())
     })
     .await
     .map_err(join_error)?
@@ -318,121 +371,187 @@ fn workdir_of(repo: &git2::Repository) -> AppResult<PathBuf> {
         .ok_or_else(|| AppError::InvalidArg("bare 仓库没有工作区".to_string()))
 }
 
-/// 从远程拉取（fetch，不合并）：更新远程跟踪分支。
-///
-/// `remote` 为 None 时取默认远程（origin 优先）。网络操作走 git CLI
-/// 子进程（复用系统凭证配置），期间持有该仓库的条目锁，避免与
-/// 其他 git2 操作并发写 .git。
+/// 在后台线程锁定仓库条目并执行带流式进度推送的远程操作。
+async fn run_remote_with_progress<T, F>(
+    app: tauri::AppHandle,
+    state: State<'_, RepoManager>,
+    remote_ops: State<'_, RemoteOpManager>,
+    repo_id: String,
+    op_kind: &'static str,
+    task: F,
+) -> AppResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&git2::Repository, &std::path::Path, RemoteProgress<'_>) -> AppResult<T>
+        + Send
+        + 'static,
+{
+    let entry = state.inner().clone().entry(&repo_id)?;
+    let ops = remote_ops.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<T> {
+        let entry = lock_entry(&entry);
+        let workdir = workdir_of(&entry.repo)?;
+        let emit = |line: &str, percent: Option<u8>| {
+            let _ = app.emit(
+                GIT_REMOTE_PROGRESS_EVENT,
+                GitProgressEvent {
+                    repo_id: repo_id.clone(),
+                    op: op_kind.to_string(),
+                    message: line.to_string(),
+                    percent,
+                },
+            );
+        };
+        let progress = RemoteProgress {
+            manager: &ops,
+            repo_id: &repo_id,
+            on_line: &emit,
+        };
+        task(&entry.repo, &workdir, progress)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 从远程拉取（fetch，不合并）：更新远程跟踪分支（带流式进度与取消支持）。
 #[tauri::command]
 pub async fn fetch_repository(
+    app: tauri::AppHandle,
     state: State<'_, RepoManager>,
+    remote_ops: State<'_, RemoteOpManager>,
     repo_id: String,
     remote: Option<String>,
 ) -> AppResult<FetchResult> {
-    let entry = state.inner().clone().entry(&repo_id)?;
-    tauri::async_runtime::spawn_blocking(move || -> AppResult<FetchResult> {
-        let entry = lock_entry(&entry);
-        let workdir = workdir_of(&entry.repo)?;
-        git_remote::fetch(&entry.repo, &workdir, remote.as_deref())
-    })
+    run_remote_with_progress(
+        app,
+        state,
+        remote_ops,
+        repo_id,
+        "fetch",
+        move |repo, workdir, p| {
+            git_remote::fetch_with_progress(repo, workdir, remote.as_deref(), Some(p))
+        },
+    )
     .await
-    .map_err(join_error)?
 }
 
 /// 拉取并合并到当前分支（pull，遵循仓库 merge/rebase 配置）。
-///
-/// 网络操作走 git CLI 子进程；成功返回规整输出与新的仓库信息。
 #[tauri::command]
 pub async fn pull_repository(
+    app: tauri::AppHandle,
     state: State<'_, RepoManager>,
+    remote_ops: State<'_, RemoteOpManager>,
     repo_id: String,
 ) -> AppResult<PullResult> {
-    let entry = state.inner().clone().entry(&repo_id)?;
-    tauri::async_runtime::spawn_blocking(move || -> AppResult<PullResult> {
-        let entry = lock_entry(&entry);
-        let workdir = workdir_of(&entry.repo)?;
-        git_remote::pull(&entry.repo, &workdir)
-    })
+    run_remote_with_progress(
+        app,
+        state,
+        remote_ops,
+        repo_id,
+        "pull",
+        |repo, workdir, p| git_remote::pull_with_progress(repo, workdir, Some(p)),
+    )
     .await
-    .map_err(join_error)?
 }
 
 /// 推送当前分支（push；无上游时建立跟踪后推送）。
-///
-/// 网络操作走 git CLI 子进程；非快进被拒等错误由 git 透传。
 #[tauri::command]
 pub async fn push_repository(
+    app: tauri::AppHandle,
     state: State<'_, RepoManager>,
+    remote_ops: State<'_, RemoteOpManager>,
     repo_id: String,
 ) -> AppResult<PushResult> {
-    let entry = state.inner().clone().entry(&repo_id)?;
-    tauri::async_runtime::spawn_blocking(move || -> AppResult<PushResult> {
-        let entry = lock_entry(&entry);
-        let workdir = workdir_of(&entry.repo)?;
-        git_remote::push(&entry.repo, &workdir)
-    })
+    run_remote_with_progress(
+        app,
+        state,
+        remote_ops,
+        repo_id,
+        "push",
+        |repo, workdir, p| git_remote::push_with_progress(repo, workdir, Some(p)),
+    )
     .await
-    .map_err(join_error)?
 }
 
 #[tauri::command]
 pub async fn fetch_all_remotes(
+    app: tauri::AppHandle,
     state: State<'_, RepoManager>,
+    remote_ops: State<'_, RemoteOpManager>,
     repo_id: String,
 ) -> AppResult<GitActionResult> {
-    let entry = state.inner().clone().entry(&repo_id)?;
-    tauri::async_runtime::spawn_blocking(move || -> AppResult<GitActionResult> {
-        let entry = lock_entry(&entry);
-        let workdir = workdir_of(&entry.repo)?;
-        git_remote::fetch_all(&entry.repo, &workdir)
-    })
+    run_remote_with_progress(
+        app,
+        state,
+        remote_ops,
+        repo_id,
+        "fetch",
+        |repo, workdir, p| git_remote::fetch_all_with_progress(repo, workdir, Some(p)),
+    )
     .await
-    .map_err(join_error)?
 }
 
 #[tauri::command]
 pub async fn pull_rebase_repository(
+    app: tauri::AppHandle,
     state: State<'_, RepoManager>,
+    remote_ops: State<'_, RemoteOpManager>,
     repo_id: String,
 ) -> AppResult<PullResult> {
-    let entry = state.inner().clone().entry(&repo_id)?;
-    tauri::async_runtime::spawn_blocking(move || -> AppResult<PullResult> {
-        let entry = lock_entry(&entry);
-        let workdir = workdir_of(&entry.repo)?;
-        git_remote::pull_rebase(&entry.repo, &workdir)
-    })
+    run_remote_with_progress(
+        app,
+        state,
+        remote_ops,
+        repo_id,
+        "pull",
+        |repo, workdir, p| git_remote::pull_rebase_with_progress(repo, workdir, Some(p)),
+    )
     .await
-    .map_err(join_error)?
 }
 
 #[tauri::command]
 pub async fn push_force_with_lease_repository(
+    app: tauri::AppHandle,
     state: State<'_, RepoManager>,
+    remote_ops: State<'_, RemoteOpManager>,
     repo_id: String,
 ) -> AppResult<PushResult> {
-    let entry = state.inner().clone().entry(&repo_id)?;
-    tauri::async_runtime::spawn_blocking(move || -> AppResult<PushResult> {
-        let entry = lock_entry(&entry);
-        let workdir = workdir_of(&entry.repo)?;
-        git_remote::push_force_with_lease(&entry.repo, &workdir)
-    })
+    run_remote_with_progress(
+        app,
+        state,
+        remote_ops,
+        repo_id,
+        "push",
+        |repo, workdir, p| git_remote::push_force_with_lease_with_progress(repo, workdir, Some(p)),
+    )
     .await
-    .map_err(join_error)?
 }
 
 #[tauri::command]
 pub async fn push_tags_repository(
+    app: tauri::AppHandle,
     state: State<'_, RepoManager>,
+    remote_ops: State<'_, RemoteOpManager>,
     repo_id: String,
 ) -> AppResult<PushResult> {
-    let entry = state.inner().clone().entry(&repo_id)?;
-    tauri::async_runtime::spawn_blocking(move || -> AppResult<PushResult> {
-        let entry = lock_entry(&entry);
-        let workdir = workdir_of(&entry.repo)?;
-        git_remote::push_tags(&entry.repo, &workdir)
-    })
+    run_remote_with_progress(
+        app,
+        state,
+        remote_ops,
+        repo_id,
+        "push",
+        |repo, workdir, p| git_remote::push_tags_with_progress(repo, workdir, Some(p)),
+    )
     .await
-    .map_err(join_error)?
+}
+
+/// 取消指定仓库正在执行的远程操作（无锁等待，立即终止 git 子进程树）。
+#[tauri::command]
+pub async fn cancel_remote_operation(
+    remote_ops: State<'_, RemoteOpManager>,
+    repo_id: String,
+) -> AppResult<bool> {
+    Ok(remote_ops.cancel(&repo_id))
 }
 
 #[tauri::command]
@@ -447,7 +566,13 @@ pub async fn create_branch(
     tauri::async_runtime::spawn_blocking(move || -> AppResult<GitActionResult> {
         let entry = lock_entry(&entry);
         let workdir = workdir_of(&entry.repo)?;
-        git_remote::create_branch(&entry.repo, &workdir, &name, start_point.as_deref(), checkout)
+        git_remote::create_branch(
+            &entry.repo,
+            &workdir,
+            &name,
+            start_point.as_deref(),
+            checkout,
+        )
     })
     .await
     .map_err(join_error)?
@@ -481,6 +606,38 @@ pub async fn merge_branch(
         let entry = lock_entry(&entry);
         let workdir = workdir_of(&entry.repo)?;
         git_remote::merge_branch(&entry.repo, &workdir, &name)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 中止进行中的合并 / 变基 / cherry-pick / revert。
+#[tauri::command]
+pub async fn abort_operation(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+) -> AppResult<GitActionResult> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<GitActionResult> {
+        let entry = lock_entry(&entry);
+        let workdir = workdir_of(&entry.repo)?;
+        git_remote::abort_operation(&entry.repo, &workdir)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 解决冲突后继续进行中的合并 / 变基 / cherry-pick / revert。
+#[tauri::command]
+pub async fn continue_operation(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+) -> AppResult<GitActionResult> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<GitActionResult> {
+        let entry = lock_entry(&entry);
+        let workdir = workdir_of(&entry.repo)?;
+        git_remote::continue_operation(&entry.repo, &workdir)
     })
     .await
     .map_err(join_error)?

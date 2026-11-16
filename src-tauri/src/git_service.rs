@@ -12,7 +12,7 @@ use crate::diff_engine::{self, DiffOptions as TextDiffOptions};
 use crate::error::{AppError, AppResult};
 use crate::types::{
     BranchInfo, BranchKind, ChangeType, ChangedFile, ChildRepo, CommitNode, FileDiffResult,
-    FileStatus, LogFilter, RefKind, RefLabel, RepoInfo,
+    FileStatus, LogFilter, RefKind, RefLabel, RepoInfo, RepoState,
 };
 
 /// 二进制内容嗅探窗口（字节）：前 8KB 出现 NUL 即视为二进制。
@@ -49,6 +49,32 @@ pub fn list_child_repos(dir: &Path) -> Vec<ChildRepo> {
         .collect();
     repos.sort_by(|a, b| a.name.cmp(&b.name));
     repos
+}
+
+/// 读取仓库当前进行中的操作状态（Clean / Merging / Rebasing / CherryPicking / Reverting 等）。
+pub fn repo_state(repo: &git2::Repository) -> RepoState {
+    match repo.state() {
+        git2::RepositoryState::Clean => RepoState::Clean,
+        git2::RepositoryState::Merge => RepoState::Merging,
+        git2::RepositoryState::Rebase
+        | git2::RepositoryState::RebaseInteractive
+        | git2::RepositoryState::RebaseMerge => RepoState::Rebasing,
+        git2::RepositoryState::CherryPick | git2::RepositoryState::CherryPickSequence => {
+            RepoState::CherryPicking
+        }
+        git2::RepositoryState::Revert | git2::RepositoryState::RevertSequence => {
+            RepoState::Reverting
+        }
+        git2::RepositoryState::Bisect => RepoState::Bisecting,
+        git2::RepositoryState::ApplyMailbox => RepoState::Applying,
+        git2::RepositoryState::ApplyMailboxOrRebase => {
+            if repo.path().join("rebase-apply/rebasing").exists() {
+                RepoState::Rebasing
+            } else {
+                RepoState::Applying
+            }
+        }
+    }
 }
 
 /// 读取仓库基本信息（见 [`RepoInfo`] 字段说明）。
@@ -100,6 +126,7 @@ pub fn repo_info(repo: &git2::Repository) -> AppResult<RepoInfo> {
         name,
         head_branch,
         head_commit,
+        state: repo_state(repo),
     })
 }
 
@@ -412,19 +439,29 @@ pub fn status(repo: &git2::Repository) -> AppResult<Vec<FileStatus>> {
         let Ok(path) = entry.path() else {
             continue;
         };
-        let staged = entry
-            .head_to_index()
-            .and_then(|d| delta_change_type(d.status()));
-        let unstaged = entry
-            .index_to_workdir()
-            .and_then(|d| delta_change_type(d.status()));
-        if staged.is_none() && unstaged.is_none() {
+        let conflicted = entry.status().is_conflicted();
+        let staged = if conflicted {
+            None
+        } else {
+            entry
+                .head_to_index()
+                .and_then(|d| delta_change_type(d.status()))
+        };
+        let unstaged = if conflicted {
+            None
+        } else {
+            entry
+                .index_to_workdir()
+                .and_then(|d| delta_change_type(d.status()))
+        };
+        if staged.is_none() && unstaged.is_none() && !conflicted {
             continue;
         }
         out.push(FileStatus {
             path: path.to_string(),
             staged,
             unstaged,
+            conflicted,
         });
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
@@ -435,6 +472,7 @@ pub fn status(repo: &git2::Repository) -> AppResult<Vec<FileStatus>> {
 ///
 /// 将工作区文件写入 index（`index.add_path`）；若文件在工作区已被删除，
 /// 则从 index 移除该路径（`index.remove_path`），最后写回 index。
+/// 若路径处于冲突状态，同时清除 stage 1/2/3 冲突条目（等价于 `git add <path>` / 标记已解决）。
 pub fn stage_file(repo: &mut git2::Repository, path: &str) -> AppResult<()> {
     let workdir = repo
         .workdir()
@@ -456,13 +494,17 @@ pub fn stage_file(repo: &mut git2::Repository, path: &str) -> AppResult<()> {
             .update_all(&pathspec, None)
             .map_err(|e| AppError::Git(format!("同步目录 {path} 的删除失败: {e}")))?;
     } else if full.exists() {
+        let _ = index.conflict_remove(rel);
         index
             .add_path(rel)
             .map_err(|e| AppError::Git(format!("暂存 {path} 失败: {e}")))?;
     } else {
-        index
-            .remove_path(rel)
-            .map_err(|e| AppError::Git(format!("从 index 移除 {path} 失败: {e}")))?;
+        let _ = index.conflict_remove(rel);
+        if index.get_path(rel, 0).is_some() {
+            index
+                .remove_path(rel)
+                .map_err(|e| AppError::Git(format!("从 index 移除 {path} 失败: {e}")))?;
+        }
     }
     index
         .write()
@@ -509,10 +551,20 @@ pub fn unstage_file(repo: &mut git2::Repository, path: &str) -> AppResult<()> {
 ///   不会自动清理）；
 ///   提交后更新 HEAD（处于分支上时更新分支引用，分离 HEAD 时移动 HEAD）。
 pub fn create_commit(repo: &mut git2::Repository, message: &str) -> AppResult<String> {
+    if repo_state(repo) == RepoState::Rebasing {
+        return Err(AppError::InvalidArg(
+            "正在进行 Rebase，请解决冲突并暂存后使用「继续」完成变基".to_string(),
+        ));
+    }
     let signature = commit_signature(repo)?;
     let mut index = repo
         .index()
         .map_err(|e| AppError::Git(format!("读取 index 失败: {e}")))?;
+    if index.has_conflicts() {
+        return Err(AppError::Git(
+            "仍有未解决的冲突文件，请先解决冲突并标记为已解决".to_string(),
+        ));
+    }
     let tree_oid = index
         .write_tree_to(repo)
         .map_err(|e| AppError::Git(format!("从 index 写树失败: {e}")))?;
@@ -552,16 +604,15 @@ pub fn create_commit(repo: &mut git2::Repository, message: &str) -> AppResult<St
         )
         .map_err(|e| AppError::Git(format!("创建提交失败: {e}")))?;
 
-    // 提交成功后收尾合并：删除 MERGE_HEAD 引用与 MERGE_MSG / MERGE_MODE
-    // 文件（尽力而为，失败不影响已创建的提交）。
-    if merge_head.is_some() {
-        if let Ok(mut reference) = repo.find_reference("MERGE_HEAD") {
+    // 提交成功后收尾合并 / cherry-pick / revert 状态文件（libgit2 不会自动清理）。
+    for refname in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"] {
+        if let Ok(mut reference) = repo.find_reference(refname) {
             let _ = reference.delete();
         }
-        let gitdir = repo.path(); // .git 目录本身（MERGE_MSG / MERGE_MODE 所在）
-        for file in ["MERGE_MSG", "MERGE_MODE"] {
-            let _ = std::fs::remove_file(gitdir.join(file));
-        }
+    }
+    let gitdir = repo.path();
+    for file in ["MERGE_MSG", "MERGE_MODE", "AUTO_MERGE"] {
+        let _ = std::fs::remove_file(gitdir.join(file));
     }
     Ok(oid.to_string())
 }
@@ -2056,5 +2107,81 @@ mod tests {
             Some("dev")
         );
         assert_eq!(read_workdir(&repo, "a.txt"), "remote-version\n");
+    }
+
+    #[test]
+    fn conflicted_status_and_stage_resolution() {
+        let (dir, mut repo) = init_repo();
+        let base_oid = commit_file(&repo, "a.txt", "base\n", "base");
+        let base_commit = repo
+            .find_commit(git2::Oid::from_str(&base_oid).unwrap())
+            .unwrap();
+        let main_branch = repo.head().unwrap().shorthand().unwrap().to_string();
+
+        // 分叉出 topic 分支并修改 a.txt
+        repo.branch("topic", &base_commit, false).unwrap();
+        drop(base_commit);
+        checkout_branch(&mut repo, "topic").unwrap();
+        commit_file(&repo, "a.txt", "theirs\n", "topic edit");
+
+        // 切回主分支做冲突修改
+        checkout_branch(&mut repo, &main_branch).unwrap();
+        commit_file(&repo, "a.txt", "ours\n", "main edit");
+
+        // 用 git CLI 制造真实 merge 冲突（含 MERGE_HEAD 与 stage 1/2/3）
+        let out = std::process::Command::new("git")
+            .current_dir(dir.path())
+            .args(["merge", "topic"])
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "应当产生合并冲突");
+
+        let info = repo_info(&repo).unwrap();
+        assert_eq!(info.state, RepoState::Merging);
+
+        let statuses = status(&repo).unwrap();
+        let entry = find_status(&statuses, "a.txt").expect("冲突文件不得被 status 过滤掉");
+        assert!(entry.conflicted);
+        assert!(entry.staged.is_none());
+        assert!(entry.unstaged.is_none());
+
+        // 未解决冲突前禁止直接 create_commit
+        assert!(matches!(
+            create_commit(&mut repo, "fail"),
+            Err(AppError::Git(_))
+        ));
+
+        // 手工写入解决结果并 stage_file → 应清除冲突并进入 staged
+        std::fs::write(dir.path().join("a.txt"), "resolved\n").unwrap();
+        stage_file(&mut repo, "a.txt").unwrap();
+
+        let after_stage = status(&repo).unwrap();
+        let entry = find_status(&after_stage, "a.txt").expect("暂存后应在列表");
+        assert!(!entry.conflicted);
+        assert_eq!(entry.staged, Some(ChangeType::Modified));
+
+        // 测试删除冲突：先用 stage_file 在文件不存在时清理冲突
+        let mut idx = repo.index().unwrap();
+        let fake = git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o100644,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: repo.blob(b"x").unwrap(),
+            flags: (2u16 << 12), // stage 2
+            flags_extended: 0,
+            path: b"deleted_conflict.txt".to_vec(),
+        };
+        idx.add(&fake).unwrap();
+        idx.write().unwrap();
+        stage_file(&mut repo, "deleted_conflict.txt").unwrap();
+        assert!(
+            !repo.index().unwrap().has_conflicts(),
+            "文件删除时 stage_file 也应清除冲突条目"
+        );
     }
 }

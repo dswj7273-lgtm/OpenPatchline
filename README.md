@@ -16,13 +16,14 @@
 
 也可从源码构建：见下方 [开发](#开发) 一节。
 
-## 功能（MVP 进行中）
+## 功能（MVP）
 
 - **Git 提交历史树** —— 泳道式分支图（Canvas 渲染）、merge/分叉拓扑、分支/Tag/HEAD 标签、增量分页加载、按作者/信息/分支过滤
-- **左右分栏 Diff** —— 行精准对齐（spacer 占位）、行级 Histogram Diff、行内字符级高亮、语法高亮（CodeMirror Lezer）、同步滚动、变更块导航、**变更概览导航条（右侧滚动条标记，点击一键跳转）**、Unified/Split 双模式
-- **文件变更与基础操作** —— staged/unstaged 分组、文件级 stage/unstage、commit
-- **外部变更自动刷新** —— 监听 `.git` 目录（notify/FSEvents），IDEA / 终端等外部 commit、checkout、fetch 后自动刷新，无需手动刷新
-- **拉取更新与分支切换** —— 获取（fetch）/拉取（pull）/**推送（push，新分支自动建立跟踪）**，走 git CLI 复用系统凭证；分支面板（本地/远程分组、ahead/behind 徽标、点击切换；远程分支检出为新本地跟踪分支）
+- **左右分栏 Diff** —— 行精准对齐（spacer 占位）、行级 Histogram Diff、行内字符级高亮、Web Worker 异步语法高亮（CodeMirror Lezer，支持大文件降级）、横向同步/独立滚动、变更块导航、**变更概览导航条（右侧滚动条标记，点击一键跳转）**、Unified/Split 双模式
+- **文件变更与工作区操作** —— 冲突/已暂存/工作区/未跟踪分组、目录树/文件级 stage/unstage、discard、commit/amend、cherry-pick/revert/reset、stash 栈管理
+- **冲突状态感知与闭环** —— 自动识别 `MERGING / REBASING / CHERRY_PICKING / REVERTING` 状态、顶部横幅快捷继续/中止、冲突文件独立分组与一键标记解决
+- **外部变更自动刷新** —— 监听 `.git` 目录（notify/FSEvents），IDEA / 终端等外部 commit、checkout、fetch、rebase 后自动刷新，无需手动刷新
+- **远程操作与仓库切换** —— fetch / pull / pull --rebase / push / force-with-lease / push --tags 走 git CLI 复用系统凭证，支持实时流式进度与取消；分支面板与最近仓库切换器（自动清理失效路径）
 
 完整设计文档见 [`docs/`](./docs/)（10 份：产品需求、技术选型、架构、Diff 引擎、Git 引擎、UI/UX、数据流、性能安全、路线图、测试策略）。
 
@@ -52,10 +53,10 @@ npx tsc --noEmit             # 前端类型检查
 ## 路线图
 
 - [x] Phase 0：脚手架与 CI
-- [ ] Phase 1：提交历史树
-- [ ] Phase 2：左右分栏 Diff
-- [x] Phase 3：文件变更 + 基础 Git 操作（fetch/pull/push 走 git CLI 子进程）
-- [ ] v2+：行级 stage、合并冲突编辑器、GitHub/GitLab 集成、Windows/Linux
+- [x] Phase 1：提交历史树（泳道图、分页、作者/分支/关键词过滤、最近仓库切换）
+- [x] Phase 2：左右分栏 Diff（Histogram + 对齐 + 字符级 + Web Worker 语法高亮 + 横向滚动同步）
+- [x] Phase 3：文件变更 + Git 操作（流式进度与取消、冲突状态感知与 Abort/Continue、stash/reset/cherry-pick）
+- [ ] 后续规划：工程化测试基线、Hunk/行级 stage、三方合并冲突编辑器、Blame 视图、GitHub/GitLab 集成、Windows/Linux
 
 ## License
 

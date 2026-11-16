@@ -1,7 +1,7 @@
 //! 统一错误类型：所有 Tauri Command 与内部服务的错误出口。
 //!
 //! 序列化为 `{ code: String, message: String }`，`code` 为蛇形变体名
-//! （`"git"` / `"io"` / `"not_found"` / `"invalid_arg"` / `"too_large"` / `"unexpected"`），
+//! （`"git"` / `"io"` / `"not_found"` / `"invalid_arg"` / `"too_large"` / `"cancelled"` / `"unexpected"`），
 //! 前端据此区分错误类别并展示 `message`。
 
 use serde::ser::{Serialize, SerializeStruct, Serializer};
@@ -24,6 +24,9 @@ pub enum AppError {
     /// 资源超过处理阈值（大文件保护，见 docs/05 §8）。
     #[error("resource too large")]
     TooLarge,
+    /// 用户主动取消的异步操作。
+    #[error("操作已取消")]
+    Cancelled,
     /// 未归类的内部错误。
     #[error("unexpected error: {0}")]
     Unexpected(String),
@@ -38,6 +41,7 @@ impl AppError {
             AppError::NotFound(_) => "not_found",
             AppError::InvalidArg(_) => "invalid_arg",
             AppError::TooLarge => "too_large",
+            AppError::Cancelled => "cancelled",
             AppError::Unexpected(_) => "unexpected",
         }
     }

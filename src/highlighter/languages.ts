@@ -58,9 +58,4 @@ export function languageForExtension(ext: string): LanguageSupport | null {
   return EXTENSION_LANGUAGES.get(ext) ?? null;
 }
 
-/** 取文件路径的小写扩展名（不含点）；无扩展名返回空字符串。 */
-export function extensionOf(path: string): string {
-  const idx = path.lastIndexOf(".");
-  if (idx <= 0 || idx === path.length - 1) return "";
-  return path.slice(idx + 1).toLowerCase();
-}
+export { extensionOf } from "./extensions";

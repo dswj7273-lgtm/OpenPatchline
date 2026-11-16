@@ -5,7 +5,7 @@
  * - 主区域按 activeView 在 GitLogView / DiffView 间切换（docs/06 §1.2）；
  * - Escape 关闭弹层或从 diff 返回提交列表；Cmd/Ctrl+O 打开仓库，Cmd/Ctrl+Shift+T 切换主题。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import { listen } from "@tauri-apps/api/event";
 import * as DiffViewModule from "./components/DiffView/DiffView";
@@ -14,6 +14,8 @@ import {
   AlertIcon,
   BranchIcon,
   CheckCircleIcon,
+  CheckIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
   CloseIcon,
   FolderOpenIcon,
@@ -23,6 +25,7 @@ import {
 } from "./components/Icons";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { useAppStore } from "./store/app";
+import type { GitProgressEvent, RepoState } from "./types";
 
 const OPEN_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘ O" : "Ctrl O";
 const THEME_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘⇧T" : "Ctrl+Shift+T";
@@ -77,11 +80,58 @@ function OpenRepoButton({ big }: { big?: boolean }) {
   );
 }
 
-/** 顶栏：品牌标识 + 仓库上下文面包屑 + 主题切换 + 打开仓库。 */
+const REPO_STATE_BADGE: Record<Exclude<RepoState, "clean">, string> = {
+  merging: "MERGE",
+  rebasing: "REBASE",
+  cherryPicking: "CHERRY-PICK",
+  reverting: "REVERT",
+  bisecting: "BISECT",
+  applying: "APPLY",
+};
+
+const REPO_STATE_VERB: Record<Exclude<RepoState, "clean">, string> = {
+  merging: "合并",
+  rebasing: "变基",
+  cherryPicking: "Cherry-pick",
+  reverting: "Revert",
+  bisecting: "二分查找",
+  applying: "应用补丁",
+};
+
+/** 顶栏：品牌标识 + 仓库切换器 + 分支面包屑 + 主题切换 + 打开仓库。 */
 function TopBar() {
   const repo = useAppStore(s => s.repo);
+  const recentRepos = useAppStore(s => s.recentRepos);
+  const openRepo = useAppStore(s => s.openRepo);
+  const removeRecentRepo = useAppStore(s => s.removeRecentRepo);
+  const loadRecentRepos = useAppStore(s => s.loadRecentRepos);
   const theme = useAppStore(s => s.theme);
   const setTheme = useAppStore(s => s.setTheme);
+
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const switcherRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!switcherOpen) return;
+    void loadRecentRepos();
+    const onPointerDown = (e: MouseEvent) => {
+      if (switcherRef.current && !switcherRef.current.contains(e.target as Node)) {
+        setSwitcherOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setSwitcherOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [switcherOpen, loadRecentRepos]);
 
   const toggleThemeLabel =
     theme === "dark" ? `切换到浅色主题 (${THEME_SHORTCUT})` : `切换到深色主题 (${THEME_SHORTCUT})`;
@@ -97,12 +147,89 @@ function TopBar() {
       {repo && (
         <>
           <span className="top-bar-sep" aria-hidden="true" />
-          <div className="top-bar-context">
-            <span className="top-bar-repo">{repo.name}</span>
+          <div className="top-bar-context" ref={switcherRef}>
+            <button
+              type="button"
+              className={`top-bar-repo-btn${switcherOpen ? " is-open" : ""}`}
+              aria-haspopup="listbox"
+              aria-expanded={switcherOpen}
+              title={`切换最近仓库（当前：${repo.path}）`}
+              onClick={() => setSwitcherOpen(v => !v)}
+            >
+              <span className="top-bar-repo">{repo.name}</span>
+              <ChevronDownIcon className="top-bar-repo-caret" />
+            </button>
             <span className="top-bar-branch" title={repo.headBranch ?? "分离 HEAD"}>
               <BranchIcon />
               <span className="top-bar-branch-name">{repo.headBranch ?? "(detached)"}</span>
             </span>
+
+            {switcherOpen && (
+              <div className="repo-switcher-popover" role="listbox" aria-label="最近打开的仓库">
+                <div className="repo-switcher-heading">最近打开的仓库</div>
+                <div className="repo-switcher-list">
+                  {recentRepos.length > 0 ? (
+                    recentRepos.map(item => {
+                      const isCurrent = item.id === repo.id;
+                      return (
+                        <div
+                          key={item.id}
+                          className={`repo-switcher-row${isCurrent ? " is-current" : ""}`}
+                        >
+                          <button
+                            type="button"
+                            role="option"
+                            aria-selected={isCurrent}
+                            className="repo-switcher-item"
+                            disabled={isCurrent}
+                            onClick={() => {
+                              setSwitcherOpen(false);
+                              void openRepo(item.path);
+                            }}
+                          >
+                            <FolderOpenIcon className="repo-switcher-icon" />
+                            <span className="repo-switcher-copy">
+                              <span className="repo-switcher-name">{item.name}</span>
+                              <span className="repo-switcher-path" title={item.path}>
+                                {item.path}
+                              </span>
+                            </span>
+                            {isCurrent && <CheckIcon className="repo-switcher-check" />}
+                          </button>
+                          {!isCurrent && (
+                            <button
+                              type="button"
+                              className="icon-btn repo-switcher-remove"
+                              aria-label={`从最近列表移除 ${item.name}`}
+                              title="从最近列表移除"
+                              onClick={() => void removeRecentRepo(item.path)}
+                            >
+                              <CloseIcon />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="repo-switcher-empty">暂无最近仓库记录</div>
+                  )}
+                </div>
+                <div className="repo-switcher-footer">
+                  <button
+                    type="button"
+                    className="repo-switcher-open-btn"
+                    onClick={() => {
+                      setSwitcherOpen(false);
+                      void openRepo();
+                    }}
+                  >
+                    <FolderOpenIcon />
+                    <span>打开其他仓库…</span>
+                    <kbd>{OPEN_SHORTCUT}</kbd>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           <span className="top-bar-path" title={repo.path}>
             {repo.path}
@@ -123,6 +250,103 @@ function TopBar() {
         <OpenRepoButton />
       </div>
     </header>
+  );
+}
+
+/** 冲突 / 进行中操作横幅：展示仓库状态与 Continue / Abort 控制按钮。 */
+function ConflictBanner() {
+  const repo = useAppStore(s => s.repo);
+  const fileStatus = useAppStore(s => s.fileStatus);
+  const gitBusy = useAppStore(s => s.gitBusy);
+  const abortOperation = useAppStore(s => s.abortOperation);
+  const continueOperation = useAppStore(s => s.continueOperation);
+
+  const conflictedCount = useMemo(
+    () => fileStatus.filter(f => f.conflicted).length,
+    [fileStatus],
+  );
+
+  if (!repo || (repo.state === "clean" && conflictedCount === 0)) return null;
+
+  const stateKey = repo.state === "clean" ? "merging" : repo.state;
+  const badge = REPO_STATE_BADGE[stateKey];
+  const verb = REPO_STATE_VERB[stateKey];
+  const canContinue = repo.state !== "clean" && repo.state !== "bisecting" && conflictedCount === 0;
+  const busy = gitBusy !== null;
+
+  return (
+    <div className="conflict-strip" role="region" aria-label="仓库冲突状态">
+      <AlertIcon className="strip-icon" />
+      <span className="conflict-badge">{badge}</span>
+      <span className="conflict-text">
+        {conflictedCount > 0
+          ? `正在${verb}：存在 ${conflictedCount} 个冲突文件，请在侧栏查看并解决后点击「+」标记为已解决`
+          : `正在${verb}：冲突已全部解决，可点击「继续」完成${verb}或「中止」恢复`}
+      </span>
+      <div className="conflict-actions">
+        {repo.state !== "clean" && repo.state !== "bisecting" && (
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={busy || !canContinue}
+            title={
+              conflictedCount > 0
+                ? `还有 ${conflictedCount} 个冲突文件未解决`
+                : `继续完成${verb}`
+            }
+            onClick={() => void continueOperation()}
+          >
+            {gitBusy === "conflict" ? "处理中…" : `继续${verb}`}
+          </button>
+        )}
+        {repo.state !== "clean" && (
+          <button
+            type="button"
+            className="btn btn-sm conflict-abort-btn"
+            disabled={busy}
+            title={`中止${verb}并恢复到操作前状态`}
+            onClick={() => void abortOperation()}
+          >
+            中止{verb}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 远程操作（fetch / pull / push）实时流式进度条与取消入口。 */
+function RemoteProgressStrip() {
+  const gitBusy = useAppStore(s => s.gitBusy);
+  const remoteProgress = useAppStore(s => s.remoteProgress);
+  const cancelRemoteOp = useAppStore(s => s.cancelRemoteOp);
+
+  if (gitBusy !== "fetch" && gitBusy !== "pull" && gitBusy !== "push") return null;
+
+  const opLabel = gitBusy === "fetch" ? "正在获取远程" : gitBusy === "pull" ? "正在拉取更新" : "正在推送";
+  const pct = remoteProgress?.percent ?? null;
+
+  return (
+    <div className="progress-strip" role="status" aria-live="polite">
+      <span className="progress-strip-spinner" aria-hidden="true" />
+      <span className="progress-strip-label">{opLabel}</span>
+      <span className="progress-strip-msg" title={remoteProgress?.message}>
+        {remoteProgress?.message ?? "正在连接远程仓库…"}
+      </span>
+      {pct !== null && (
+        <div className="progress-strip-bar" aria-label={`进度 ${pct}%`}>
+          <div className="progress-strip-fill" style={{ width: `${pct}%` }} />
+        </div>
+      )}
+      {pct !== null && <span className="progress-strip-pct">{pct}%</span>}
+      <button
+        type="button"
+        className="btn btn-sm progress-strip-cancel"
+        onClick={() => void cancelRemoteOp()}
+      >
+        取消
+      </button>
+    </div>
   );
 }
 
@@ -280,6 +504,9 @@ function RepoCandidateModal() {
 
 export default function App() {
   const repo = useAppStore(s => s.repo);
+  const recentRepos = useAppStore(s => s.recentRepos);
+  const openRepo = useAppStore(s => s.openRepo);
+  const removeRecentRepo = useAppStore(s => s.removeRecentRepo);
   const activeView = useAppStore(s => s.activeView);
   const theme = useAppStore(s => s.theme);
   const goBackToLog = useAppStore(s => s.goBackToLog);
@@ -289,24 +516,38 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
+  // 启动时加载最近打开的仓库列表（后端自动清理失效路径）。
+  useEffect(() => {
+    void useAppStore.getState().loadRecentRepos();
+  }, []);
+
   // 仓库变更监听（Rust notify 监听 .git，防抖后推送）：外部操作后自动刷新。
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    let unlistenStatus: (() => void) | undefined;
+    let unlistenProgress: (() => void) | undefined;
     let cancelled = false;
     void listen<string>("repo_status_changed", (event) => {
       const state = useAppStore.getState();
       if (!state.repo || event.payload !== state.repo.id) return;
       if (state.gitBusy !== null) return;
+      void state.refreshRepoInfo();
       void state.loadFileStatus();
       void state.reloadGraph();
       void state.loadBranches();
     }).then(fn => {
       if (cancelled) fn();
-      else unlisten = fn;
+      else unlistenStatus = fn;
+    });
+    void listen<GitProgressEvent>("git_remote_progress", (event) => {
+      useAppStore.getState().setRemoteProgress(event.payload);
+    }).then(fn => {
+      if (cancelled) fn();
+      else unlistenProgress = fn;
     });
     return () => {
       cancelled = true;
-      unlisten?.();
+      unlistenStatus?.();
+      unlistenProgress?.();
     };
   }, []);
 
@@ -352,6 +593,40 @@ export default function App() {
               </p>
             </div>
             <OpenRepoButton big />
+            {recentRepos.length > 0 && (
+              <div className="empty-recent">
+                <div className="empty-recent-title">最近打开的仓库</div>
+                <ul className="empty-recent-list">
+                  {recentRepos.slice(0, 6).map(item => (
+                    <li key={item.id} className="empty-recent-row">
+                      <button
+                        type="button"
+                        className="empty-recent-item"
+                        onClick={() => void openRepo(item.path)}
+                      >
+                        <FolderOpenIcon className="empty-recent-icon" />
+                        <span className="empty-recent-copy">
+                          <span className="empty-recent-name">{item.name}</span>
+                          <span className="empty-recent-path" title={item.path}>
+                            {item.path}
+                          </span>
+                        </span>
+                        <ChevronRightIcon className="empty-recent-chevron" />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn empty-recent-remove"
+                        aria-label={`移除最近仓库 ${item.name}`}
+                        title="从最近列表移除"
+                        onClick={() => void removeRecentRepo(item.path)}
+                      >
+                        <CloseIcon />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <div className="empty-features" aria-hidden="true">
               <span className="empty-feature-pill">
                 <span className="empty-feature-dot" />
@@ -376,6 +651,8 @@ export default function App() {
   return (
     <div className="app-shell">
       <TopBar />
+      <ConflictBanner />
+      <RemoteProgressStrip />
       <ErrorStrip />
       <NoticeStrip />
       <div className="app-body">

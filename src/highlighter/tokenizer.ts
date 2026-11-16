@@ -22,10 +22,21 @@ export interface TokenSpan {
   className: string;
 }
 
+/** 分词结果（含大文件降级标记）。 */
+export interface TokenizeResult {
+  tokens: TokenSpan[][];
+  /** 是否因行数、字符数或超长压缩行触发降级。 */
+  degraded: boolean;
+}
+
 /** 分词的最大行数；超出部分不做语法高亮。 */
 const MAX_LINES = 5000;
+/** 单侧最大字符数；超出则整侧降级为纯文本，防止大文件/压缩包阻塞 Worker。 */
+const MAX_CHARS = 400_000;
+/** 单行最大字符数；超出视为压缩/机器生成文件，整侧降级为纯文本。 */
+const MAX_SINGLE_LINE_CHARS = 4000;
 
-/** 完整解析的时间预算（ms）：给足以覆盖 MAX_LINES 行的同步解析。 */
+/** 完整解析的时间预算（ms）：给足以覆盖 MAX_LINES 行的解析。 */
 const PARSE_BUDGET_MS = 1e9;
 
 /** 超限提示只发一次。 */
@@ -108,26 +119,41 @@ function lineStartsOf(s: string): number[] {
   return starts;
 }
 
+/** 是否存在超长行（如单行压缩 JS/JSON）。 */
+function hasOverlongLine(s: string, starts: number[]): boolean {
+  for (let i = 0; i < starts.length; i++) {
+    const end = i + 1 < starts.length ? starts[i + 1] - 1 : s.length;
+    if (end - starts[i] > MAX_SINGLE_LINE_CHARS) return true;
+  }
+  return false;
+}
+
 /**
- * 对完整文本做同步分词，返回逐行 token。
+ * 对完整文本做语法分词，返回逐行 token 与降级标记。
  *
  * @param content 完整文本（行间以 \n 分隔，无行尾换行亦可）
  * @param langId  文件扩展名（见 languages.ts）；未知扩展按纯文本处理
- * @returns 每行一个 TokenSpan[]（升序、互不重叠），下标与行号一致
  */
-export function tokenize(content: string, langId: string): TokenSpan[][] {
+export function tokenizeDetailed(content: string, langId: string): TokenizeResult {
   const lang = languageForExtension(langId);
   const totalStarts = lineStartsOf(content);
   const totalLines = totalStarts.length;
 
   if (!lang) {
     // 无语言支持：全部行为空 token（纯文本渲染）。
-    return Array.from({ length: totalLines }, () => []);
+    return { tokens: Array.from({ length: totalLines }, () => []), degraded: false };
   }
 
-  // 超过上限时截断到前 MAX_LINES 行（含行尾换行）。
+  // 超大文本或包含单行压缩超长行：直接降级为纯文本。
+  if (content.length > MAX_CHARS || hasOverlongLine(content, totalStarts)) {
+    return { tokens: Array.from({ length: totalLines }, () => []), degraded: true };
+  }
+
+  // 超过行数上限时截断到前 MAX_LINES 行（含行尾换行）。
   let doc = content;
+  let degraded = false;
   if (totalLines > MAX_LINES) {
+    degraded = true;
     doc = content.slice(0, totalStarts[MAX_LINES]);
     if (!warnedTooManyLines) {
       warnedTooManyLines = true;
@@ -169,5 +195,10 @@ export function tokenize(content: string, langId: string): TokenSpan[][] {
 
   // 被截断的行补空数组，保证返回长度与原内容行数一致。
   while (lines.length < totalLines) lines.push([]);
-  return lines;
+  return { tokens: lines, degraded };
+}
+
+/** 兼容入口：仅返回逐行 token 数组。 */
+export function tokenize(content: string, langId: string): TokenSpan[][] {
+  return tokenizeDetailed(content, langId).tokens;
 }

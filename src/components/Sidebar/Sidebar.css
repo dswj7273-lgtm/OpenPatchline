@@ -477,6 +477,16 @@
   color: var(--accent);
 }
 
+.sidebar-group-count.is-conflict {
+  border-color: color-mix(in oklch, var(--color-danger) 42%, transparent);
+  background: color-mix(in oklch, var(--color-danger) 15%, transparent);
+  color: var(--color-danger);
+}
+
+.sidebar-group--conflict .sidebar-group-title {
+  color: var(--color-danger);
+}
+
 .sidebar-heading .sidebar-refresh {
   width: 24px;
   height: 24px;
@@ -642,6 +652,14 @@
 
 .sidebar-file--binary {
   --file-status-color: var(--text-secondary);
+}
+
+.sidebar-file--conflicted {
+  --file-status-color: var(--color-danger);
+}
+
+.badge-conflicted {
+  color: var(--color-danger);
 }
 
 .sidebar-file-open,
@@ -838,6 +856,13 @@
   margin: 0;
   accent-color: var(--accent);
   cursor: pointer;
+}
+
+.sidebar-commit-hint {
+  margin: 4px 2px 0;
+  color: var(--color-warning);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .sidebar-commit-actions {

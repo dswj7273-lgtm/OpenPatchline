@@ -29,7 +29,8 @@ const DEBOUNCE: Duration = Duration::from_millis(500);
 
 /// `.git` 内部路径是否表征仓库状态变化（值得触发刷新）。
 ///
-/// 只监听 refs/、index、HEAD、packed-refs、MERGE_HEAD / FETCH_HEAD；
+/// 只监听 refs/、index、HEAD、packed-refs、MERGE_HEAD / FETCH_HEAD /
+/// CHERRY_PICK_HEAD / REVERT_HEAD / REBASE_HEAD / rebase-*；
 /// 排除 objects/ 写入与 `*.lock` 锁文件（fetch/commit 期间的高频噪音）。
 fn is_relevant(path: &Path) -> bool {
     let s = path.to_string_lossy();
@@ -45,6 +46,11 @@ fn is_relevant(path: &Path) -> bool {
         || s.contains("packed-refs")
         || s.ends_with("MERGE_HEAD")
         || s.ends_with("FETCH_HEAD")
+        || s.ends_with("CHERRY_PICK_HEAD")
+        || s.ends_with("REVERT_HEAD")
+        || s.ends_with("REBASE_HEAD")
+        || s.contains("rebase-merge")
+        || s.contains("rebase-apply")
 }
 
 /// 防抖循环：收到首个消息后持续吸收，静默 [`DEBOUNCE`] 无新消息时把
@@ -140,6 +146,10 @@ mod tests {
         assert!(is_relevant(Path::new("/repo/.git/index")));
         assert!(is_relevant(Path::new("/repo/.git/packed-refs")));
         assert!(is_relevant(Path::new("/repo/.git/MERGE_HEAD")));
+        assert!(is_relevant(Path::new("/repo/.git/CHERRY_PICK_HEAD")));
+        assert!(is_relevant(Path::new("/repo/.git/REVERT_HEAD")));
+        assert!(is_relevant(Path::new("/repo/.git/REBASE_HEAD")));
+        assert!(is_relevant(Path::new("/repo/.git/rebase-merge/msgnum")));
         assert!(!is_relevant(Path::new("/repo/.git/objects/ab/cdef")));
         assert!(!is_relevant(Path::new("/repo/.git/index.lock")));
         assert!(!is_relevant(Path::new("/repo/.git/refs/heads/main.lock")));
