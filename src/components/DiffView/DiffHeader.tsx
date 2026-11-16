@@ -12,8 +12,10 @@ import {
   ArrowRightIcon,
   ArrowUpIcon,
   CloseIcon,
+  LinkIcon,
   SplitViewIcon,
   UnifiedViewIcon,
+  UnlinkIcon,
 } from "../Icons";
 import DiffFileList from "./DiffFileList";
 import { GOTO_CHANGE_EVENT, type GotoChangeDetail } from "./SplitDiffGrid";
@@ -28,13 +30,18 @@ export interface DiffHeaderProps {
   loading: boolean;
   mode: DiffMode;
   onModeChange: (mode: DiffMode) => void;
+  /** 分栏模式下左右是否同步横向滚动。 */
+  hLinked: boolean;
+  onToggleHLinked: () => void;
   onPrevFile: () => void;
   onNextFile: () => void;
   onSelectFile: (index: number) => void;
   onClose: () => void;
 }
 
-const MODE_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘D" : "Ctrl+D";
+const IS_MAC = navigator.userAgent.includes("Mac");
+const MODE_SHORTCUT = IS_MAC ? "⌘D" : "Ctrl+D";
+const ALT_KEY = IS_MAC ? "⌥" : "Alt";
 
 /** 派发跳转变更事件（SplitDiffGrid / UnifiedGrid 监听并滚动）。 */
 function gotoChange(direction: GotoChangeDetail["direction"]) {
@@ -54,6 +61,8 @@ export default function DiffHeader({
   loading,
   mode,
   onModeChange,
+  hLinked,
+  onToggleHLinked,
   onPrevFile,
   onNextFile,
   onSelectFile,
@@ -137,6 +146,23 @@ export default function DiffHeader({
             <ArrowDownIcon />
           </button>
         </div>
+
+        {mode === "split" && (
+          <button
+            type="button"
+            className={`diff-header__btn diff-header__link${hLinked ? " is-active" : ""}`}
+            aria-pressed={hLinked}
+            aria-label={hLinked ? "左右同步横向滚动" : "左右独立横向滚动"}
+            title={
+              hLinked
+                ? `左右同步横向滚动（点击切换为各自独立；按住 ${ALT_KEY} 滚动可临时只滚动一侧）`
+                : "左右各自独立横向滚动（点击切换为同步）"
+            }
+            onClick={onToggleHLinked}
+          >
+            {hLinked ? <LinkIcon /> : <UnlinkIcon />}
+          </button>
+        )}
 
         <div className="diff-header__mode" role="group" aria-label="视图模式" title={`切换视图模式 (${MODE_SHORTCUT})`}>
           <button

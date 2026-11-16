@@ -30,6 +30,17 @@ function sideContent(rows: AlignedRow[], side: "left" | "right"): string {
   return rows.map((r) => (side === "left" ? r.left : r.right)?.content ?? "").join("\n");
 }
 
+const H_LINKED_KEY = "openpatchline:diff-hscroll-linked";
+
+/** 读取左右横向滚动同步偏好（默认同步）。 */
+function readHLinked(): boolean {
+  try {
+    return window.localStorage.getItem(H_LINKED_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
 export function DiffView() {
   const currentFileDiff = useAppStore((s) => s.currentFileDiff);
   const diffFiles = useAppStore((s) => s.diffFiles);
@@ -41,6 +52,19 @@ export function DiffView() {
   const goBackToLog = useAppStore((s) => s.goBackToLog);
 
   const [mode, setMode] = useState<DiffMode>("split");
+  const [hLinked, setHLinked] = useState(readHLinked);
+
+  const toggleHLinked = () => {
+    setHLinked((v) => {
+      const next = !v;
+      try {
+        window.localStorage.setItem(H_LINKED_KEY, String(next));
+      } catch {
+        /* 忽略 */
+      }
+      return next;
+    });
+  };
 
   // 快捷键：Cmd/Ctrl+D 切换分栏/统一，[ / ] 跳转上一处/下一处变更。
   useEffect(() => {
@@ -98,6 +122,8 @@ export function DiffView() {
         loading={diffLoading}
         mode={mode}
         onModeChange={setMode}
+        hLinked={hLinked}
+        onToggleHLinked={toggleHLinked}
         onPrevFile={prevDiffFile}
         onNextFile={nextDiffFile}
         onSelectFile={showDiffFile}
@@ -120,6 +146,7 @@ export function DiffView() {
             leftTokens={tokens.left}
             rightTokens={tokens.right}
             changeRowIndices={changeRowIndices}
+            hLinked={hLinked}
           />
         ) : (
           <UnifiedGrid rows={rows} leftTokens={tokens.left} rightTokens={tokens.right} />

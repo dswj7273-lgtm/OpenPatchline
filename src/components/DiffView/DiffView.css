@@ -272,6 +272,32 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* 左右横向滚动同步 / 独立切换 */
+.diff-header__link {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-0);
+  color: var(--text-muted);
+}
+
+.diff-header__link svg {
+  width: 15px;
+  height: 15px;
+}
+
+.diff-header__link.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.diff-header__link.is-active:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--accent) 20%, transparent);
+  color: var(--accent);
+}
+
 @media (max-width: 1020px) {
   .diff-header__stats {
     display: none;
@@ -461,11 +487,19 @@
 
 /* ---------- 虚拟滚动网格（分栏 + 统一共用） ---------- */
 
+.diff-grid-wrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .diff-grid {
   flex: 1;
   min-width: 0;
-  overflow-y: auto;
   overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   background: var(--surface-1);
   font-family: var(--font-code);
@@ -476,6 +510,45 @@
 .diff-grid__sizer {
   position: relative;
   width: 100%;
+}
+
+/* ---------- 横向滚动条（每侧独立，悬浮于底部） ---------- */
+
+.diff-hscroll {
+  position: absolute;
+  bottom: 2px;
+  z-index: 5;
+  height: 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.diff-hscroll:hover,
+.diff-hscroll.is-dragging {
+  background: color-mix(in oklch, var(--text-muted) 12%, transparent);
+}
+
+.diff-hscroll__thumb {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--text-muted) 38%, transparent);
+  cursor: grab;
+  transition: background 120ms ease, top 120ms ease, height 120ms ease;
+}
+
+.diff-hscroll:hover .diff-hscroll__thumb,
+.diff-hscroll.is-dragging .diff-hscroll__thumb {
+  top: 1px;
+  height: 8px;
+  background: color-mix(in oklch, var(--text-muted) 62%, transparent);
+}
+
+.diff-hscroll.is-dragging .diff-hscroll__thumb {
+  cursor: grabbing;
 }
 
 /* 分栏行：左右两格 */
@@ -530,6 +603,21 @@
   color: var(--text-primary);
   font-family: inherit;
   white-space: pre;
+}
+
+.diff-cell__track {
+  display: inline-block;
+  will-change: transform;
+}
+
+/* 旧侧 / 统一视图用 old 偏移，新侧用 new 偏移（同步模式两者相等）。 */
+.diff-cell--old .diff-cell__track,
+.u-row .diff-cell__track {
+  transform: translate3d(calc(-1 * var(--diff-scroll-x-old, 0px)), 0, 0);
+}
+
+.diff-cell--new .diff-cell__track {
+  transform: translate3d(calc(-1 * var(--diff-scroll-x-new, 0px)), 0, 0);
 }
 
 /* 删除 / 新增 / 修改对着色 */

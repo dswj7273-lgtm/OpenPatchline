@@ -328,3 +328,24 @@ export function TerminalIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/** 链接（左右同步滚动）。 */
+export function LinkIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M6.75 9.25a2.75 2.75 0 0 0 3.9 0l2-2a2.75 2.75 0 0 0-3.9-3.9l-.6.6" />
+      <path d="M9.25 6.75a2.75 2.75 0 0 0-3.9 0l-2 2a2.75 2.75 0 0 0 3.9 3.9l.6-.6" />
+    </Icon>
+  );
+}
+
+/** 断开链接（左右独立滚动）。 */
+export function UnlinkIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M9.6 4.1 8.75 3.35a2.75 2.75 0 0 1 3.9 3.9l-1.4 1.4" />
+      <path d="M6.4 11.9l-.85.75a2.75 2.75 0 0 1-3.9-3.9l1.4-1.4" />
+      <path d="M2.5 2.5l11 11" />
+    </Icon>
+  );
+}

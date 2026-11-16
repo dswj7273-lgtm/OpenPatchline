@@ -118,12 +118,14 @@ function CodeCellImpl({ cell, side, tokens }: CodeCellProps) {
     <div className={`diff-cell diff-cell--${side}${kindClass}`}>
       <span className="diff-cell__gutter">{cell.lineno ?? ""}</span>
       <code className="diff-cell__content">
-        <CodeContent
-          content={cell.content}
-          tokens={tokens}
-          charRanges={cell.charRanges}
-          side={side}
-        />
+        <span className="diff-cell__track">
+          <CodeContent
+            content={cell.content}
+            tokens={tokens}
+            charRanges={cell.charRanges}
+            side={side}
+          />
+        </span>
       </code>
     </div>
   );
