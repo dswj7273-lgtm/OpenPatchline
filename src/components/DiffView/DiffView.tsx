@@ -6,15 +6,16 @@
  * 有 diff 时 = DiffHeader + （分栏 | 统一）虚拟滚动网格。
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { extensionOf } from "../../highlighter/languages";
 import { tokenize, type TokenSpan } from "../../highlighter/tokenizer";
 import { useAppStore } from "../../store/app";
 import type { AlignedRow } from "../../types";
+import { AlertIcon } from "../Icons";
 import "./DiffView.css";
 import "../../highlighter/tokens.css";
 import DiffHeader, { type DiffMode } from "./DiffHeader";
-import SplitDiffGrid, { UnifiedGrid } from "./SplitDiffGrid";
+import SplitDiffGrid, { GOTO_CHANGE_EVENT, UnifiedGrid, type GotoChangeDetail } from "./SplitDiffGrid";
 
 /** 单文件两侧的逐行 token（下标与 AlignedRow 一致）。 */
 interface SideTokens {
@@ -39,10 +40,33 @@ export function DiffView() {
   const showDiffFile = useAppStore((s) => s.showDiffFile);
   const goBackToLog = useAppStore((s) => s.goBackToLog);
 
-  // 视图模式为组件局部状态（不进全局 store）。
   const [mode, setMode] = useState<DiffMode>("split");
 
-  // 语法分词。注意：所有 Hook 必须在早退 return 之前调用。
+  // 快捷键：Cmd/Ctrl+D 切换分栏/统一，[ / ] 跳转上一处/下一处变更。
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const inInput =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable;
+      if (inInput) return;
+
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        setMode((m) => (m === "split" ? "unified" : "split"));
+        return;
+      }
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "[" || e.key === "]")) {
+        e.preventDefault();
+        const direction: GotoChangeDetail["direction"] = e.key === "[" ? -1 : 1;
+        window.dispatchEvent(new CustomEvent<GotoChangeDetail>(GOTO_CHANGE_EVENT, { detail: { direction } }));
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   const tokens = useMemo<SideTokens>(() => {
     if (!currentFileDiff) return EMPTY_SIDE_TOKENS;
     const { rows, newPath, oldPath } = currentFileDiff;
@@ -57,7 +81,7 @@ export function DiffView() {
     return (
       <section className="diff-view diff-view--empty" aria-label="Diff 视图">
         <p className="diff-view__placeholder">
-          {diffLoading ? "加载中…" : "选择一个文件查看差异"}
+          {diffLoading ? "加载差异中…" : "选择一个文件查看差异"}
         </p>
       </section>
     );
@@ -81,14 +105,15 @@ export function DiffView() {
       />
       {tooLarge && (
         <div className="diff-view__banner" role="status">
-          ⚠ 文件过大，仅显示部分内容
+          <AlertIcon />
+          <span>文件过大，仅显示部分差异内容</span>
         </div>
       )}
       <div className="diff-view__body">
         {isBinary ? (
           <p className="diff-view__placeholder">二进制文件，无法显示文本差异</p>
         ) : rows.length === 0 ? (
-          <p className="diff-view__placeholder">无差异</p>
+          <p className="diff-view__placeholder">文件内容无文本差异</p>
         ) : mode === "split" ? (
           <SplitDiffGrid
             rows={rows}
@@ -104,5 +129,4 @@ export function DiffView() {
   );
 }
 
-// 同时提供默认导出，兼容两种导入约定。
 export default DiffView;

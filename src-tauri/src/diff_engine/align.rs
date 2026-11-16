@@ -114,7 +114,10 @@ mod tests {
         assert_eq!(l.lineno, Some(1));
         assert_eq!(r.lineno, Some(1));
         // 多余 Removed：左 Some / 右 None
-        assert_eq!(rows[1].left.as_ref().map(|c| c.content.as_str()), Some("o1"));
+        assert_eq!(
+            rows[1].left.as_ref().map(|c| c.content.as_str()),
+            Some("o1")
+        );
         assert!(rows[1].right.is_none());
     }
 

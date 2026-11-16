@@ -1,8 +1,7 @@
 /*
  * Diff 视图样式 — docs/06 §4。
  * 颜色 / 字体变量来自 theme.css；tok-* 颜色在 tokens.css。
- * 行高固定 20px（--code-line-height），与 SplitDiffGrid 的 ROW_H
- * 常量保持一致，虚拟滚动依赖该值做精确计算。
+ * 行高固定 20px（--code-line-height），与 SplitDiffGrid 的 ROW_H 常量保持一致。
  */
 
 /* ---------- 骨架 ---------- */
@@ -18,6 +17,7 @@
 .diff-view--empty {
   align-items: center;
   justify-content: center;
+  background: var(--surface-0);
 }
 
 .diff-view__placeholder {
@@ -27,7 +27,6 @@
   user-select: none;
 }
 
-/* 主体区（body 内的占位提示居中） */
 .diff-view__body {
   position: relative;
   display: flex;
@@ -40,11 +39,21 @@
 }
 
 .diff-view__banner {
-  padding: 4px 12px;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 14px;
+  background: color-mix(in oklch, var(--color-warning) 12%, var(--surface-1));
+  border-bottom: 1px solid var(--border-subtle);
   color: var(--text-secondary);
   font-size: var(--text-xs, 11px);
+}
+
+.diff-view__banner svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--color-warning);
 }
 
 /* ---------- 顶栏 ---------- */
@@ -53,18 +62,18 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  min-height: 46px;
-  padding: 8px 14px;
+  gap: 12px;
+  min-height: 48px;
+  padding: 7px 14px;
   background: var(--surface-1);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .diff-header__left,
 .diff-header__right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -77,21 +86,41 @@
   white-space: nowrap;
 }
 
+.diff-header__nav,
+.diff-header__hunks {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-0);
+}
+
+.diff-header__hunks {
+  padding-left: 8px;
+  gap: 3px;
+}
+
 .diff-header__btn {
   display: inline-flex;
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: 5px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 14px;
-  line-height: 1;
   cursor: pointer;
+  transition: background 110ms ease, color 110ms ease;
+}
+
+.diff-header__btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 .diff-header__btn:hover:not(:disabled) {
@@ -100,42 +129,84 @@
 }
 
 .diff-header__btn:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: default;
+}
+
+.diff-header__close {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
 }
 
 .diff-header__path {
   flex: 1 1 auto;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
   overflow: hidden;
-  color: var(--text-primary);
   font-family: var(--font-code);
-  font-size: var(--text-sm, 12px);
+  font-size: 12px;
   white-space: nowrap;
+}
+
+.diff-header__path-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  unicode-bidi: plaintext;
   text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.diff-header__path-base {
+  flex: none;
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .diff-header__stats {
   display: inline-flex;
   flex: none;
-  gap: 8px;
+  gap: 5px;
   font-family: var(--font-code);
-  font-size: var(--text-sm, 12px);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
+.diff-header__stat-pill {
+  padding: 2px 6px;
+  border-radius: 5px;
+  line-height: 1.3;
+}
+
+.diff-header__stat-pill--add {
+  background: color-mix(in oklch, var(--color-success) 14%, transparent);
+  color: var(--color-success);
+}
+
+.diff-header__stat-pill--remove {
+  background: color-mix(in oklch, var(--color-danger) 14%, transparent);
+  color: var(--color-danger);
+}
+
 .diff-header__stat-add {
-  color: var(--color-success, var(--accent));
+  color: var(--color-success);
 }
 
 .diff-header__stat-remove {
-  color: var(--color-danger, #e06c75);
+  color: var(--color-danger);
 }
 
 .diff-header__changes {
   flex: none;
+  margin-right: 4px;
   color: var(--text-secondary);
-  font-size: var(--text-sm, 12px);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -159,35 +230,55 @@
 .diff-header__mode {
   display: inline-flex;
   flex: none;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-0);
 }
 
 .diff-header__mode button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex: none;
-  min-height: 26px;
-  white-space: nowrap;
-  padding: 3px 9px;
+  height: 24px;
+  padding: 0 9px;
   border: none;
+  border-radius: 5px;
   background: transparent;
   color: var(--text-muted);
-  font-size: var(--text-xs, 11px);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background 110ms ease, color 110ms ease;
+}
+
+.diff-header__mode button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.diff-header__mode button:hover:not(.is-active) {
+  color: var(--text-secondary);
 }
 
 .diff-header__mode button.is-active {
   background: var(--surface-2);
   color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
 }
 
-@media (max-width: 1000px) {
+@media (max-width: 1020px) {
   .diff-header__stats {
     display: none;
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 780px) {
   .diff-header {
     flex-wrap: wrap;
     justify-content: flex-start;
@@ -212,44 +303,54 @@
 .diff-file-list__trigger {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px 6px;
+  gap: 4px;
+  height: 24px;
+  padding: 0 7px;
   border: none;
-  border-radius: 4px;
+  border-radius: 5px;
   background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--text-sm, 12px);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-weight: 550;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   cursor: pointer;
+  transition: background 110ms ease;
 }
 
-.diff-file-list__trigger:hover {
+.diff-file-list__trigger:hover,
+.diff-file-list__trigger.is-open {
   background: var(--surface-2);
-  color: var(--text-primary);
 }
 
 .diff-file-list__chevron {
+  width: 12px;
+  height: 12px;
   color: var(--text-muted);
-  font-size: 9px;
+  transition: transform 140ms ease;
+}
+
+.diff-file-list__trigger.is-open .diff-file-list__chevron {
+  transform: rotate(180deg);
 }
 
 .diff-file-list__menu {
   position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 20;
-  min-width: 320px;
-  max-width: 480px;
-  max-height: 320px;
+  top: calc(100% + 6px);
+  left: -28px;
+  z-index: 30;
+  min-width: 340px;
+  max-width: 500px;
+  max-height: 340px;
   margin: 0;
-  padding: 4px;
+  padding: 5px;
   overflow-y: auto;
   list-style: none;
-  background: var(--surface-2);
+  background: var(--surface-elevated);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
 }
 
 .diff-file-list__item {
@@ -257,58 +358,96 @@
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-height: 30px;
   padding: 4px 8px;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: var(--text-sm, 12px);
+  font-size: 12px;
   text-align: left;
   cursor: pointer;
+  transition: background 100ms ease, color 100ms ease;
 }
 
-.diff-file-list__item:hover,
+.diff-file-list__item:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
 .diff-file-list__item.is-current {
-  background: var(--surface-3);
+  background: var(--accent-soft);
   color: var(--text-primary);
 }
 
 .diff-file-list__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: none;
   width: 18px;
+  height: 18px;
+  border-radius: 4px;
   font-family: var(--font-code);
-  font-size: var(--text-xs, 11px);
-  text-align: center;
+  font-size: 10.5px;
+  font-weight: 700;
 }
 
 .diff-file-list__badge--modified {
-  color: var(--color-warning, var(--text-secondary));
+  background: color-mix(in oklch, var(--color-warning) 14%, transparent);
+  color: var(--color-warning);
 }
 
 .diff-file-list__badge--added {
-  color: var(--color-success, var(--accent));
+  background: color-mix(in oklch, var(--color-success) 14%, transparent);
+  color: var(--color-success);
 }
 
 .diff-file-list__badge--deleted {
-  color: var(--color-danger, #e06c75);
+  background: color-mix(in oklch, var(--color-danger) 14%, transparent);
+  color: var(--color-danger);
 }
 
 .diff-file-list__badge--renamed {
-  color: var(--color-info, var(--accent));
+  background: color-mix(in oklch, var(--color-renamed) 14%, transparent);
+  color: var(--color-renamed);
 }
 
-.diff-file-list__badge--binary,
-.diff-file-list__badge--untracked {
+.diff-file-list__badge--binary {
+  background: var(--surface-2);
   color: var(--text-muted);
 }
 
+.diff-file-list__badge--untracked {
+  background: color-mix(in oklch, var(--color-untracked) 14%, transparent);
+  color: var(--color-untracked);
+}
+
 .diff-file-list__path {
+  display: flex;
+  align-items: baseline;
   flex: 1;
   min-width: 0;
   overflow: hidden;
   font-family: var(--font-code);
+  font-size: 11.5px;
   white-space: nowrap;
+}
+
+.diff-file-list__dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  unicode-bidi: plaintext;
   text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.diff-file-list__base {
+  flex: none;
+  color: var(--text-primary);
+  font-weight: 500;
 }
 
 .diff-file-list__stats {
@@ -316,7 +455,8 @@
   flex: none;
   gap: 6px;
   font-family: var(--font-code);
-  font-size: var(--text-xs, 11px);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- 虚拟滚动网格（分栏 + 统一共用） ---------- */
@@ -352,33 +492,42 @@
   display: grid;
   height: 100%;
   min-width: 0;
-  grid-template-columns: 48px 1fr;
+  grid-template-columns: 50px 1fr;
 }
 
-/* 右栏左缘的中缝分隔线（box-shadow 不影响布局宽度） */
+/* 右栏左缘的中缝分隔线 */
 .diff-cell--new {
-  box-shadow: inset 1px 0 0 var(--border);
+  box-shadow: inset 1px 0 0 var(--border-subtle);
 }
 
 .diff-cell__gutter {
   box-sizing: border-box;
-  padding-right: 8px;
+  padding-right: 10px;
+  background: var(--surface-gutter);
+  border-right: 1px solid var(--border-subtle);
   color: var(--text-muted);
+  font-size: 11.5px;
   font-variant-numeric: tabular-nums;
   text-align: right;
   user-select: none;
 }
 
-.diff-cell--removed .diff-cell__gutter,
+.diff-cell--removed .diff-cell__gutter {
+  background: var(--diff-remove-line);
+  box-shadow: inset 2px 0 0 var(--diff-remove-bar);
+  color: var(--text-secondary);
+}
+
 .diff-cell--added .diff-cell__gutter {
+  background: var(--diff-add-line);
+  box-shadow: inset 2px 0 0 var(--diff-add-bar);
   color: var(--text-secondary);
 }
 
 .diff-cell__content {
-  padding: 0 8px 0 4px;
+  padding: 0 10px 0 8px;
   overflow: hidden;
   color: var(--text-primary);
-  /* code 元素默认 monospace 字体需覆盖为继承 */
   font-family: inherit;
   white-space: pre;
 }
@@ -392,27 +541,31 @@
   background: var(--diff-add-bg);
 }
 
-/* spacer 占位格：底色 + 细斜纹 */
+/* spacer 占位格：底色 + 细斜纹（适配深浅主题） */
 .diff-cell--spacer {
   background-color: var(--diff-spacer-bg);
   background-image: repeating-linear-gradient(
     135deg,
     transparent 0,
     transparent 6px,
-    rgba(255, 255, 255, 0.035) 6px,
-    rgba(255, 255, 255, 0.035) 7px
+    var(--diff-spacer-stripe) 6px,
+    var(--diff-spacer-stripe) 7px
   );
+}
+
+.diff-cell--spacer .diff-cell__gutter {
+  background: transparent;
 }
 
 /* 字符级差异 */
 .char-add {
   background: var(--diff-add-inline);
-  border-radius: 1px;
+  border-radius: 3px;
 }
 
 .char-remove {
   background: var(--diff-remove-inline);
-  border-radius: 1px;
+  border-radius: 3px;
 }
 
 /* 统一行：旧行号 | 新行号 | 内容 */
@@ -422,13 +575,16 @@
   right: 0;
   display: grid;
   height: 20px;
-  grid-template-columns: 48px 48px 1fr;
+  grid-template-columns: 50px 50px 1fr;
 }
 
 .u-gutter {
   box-sizing: border-box;
-  padding-right: 8px;
+  padding-right: 10px;
+  background: var(--surface-gutter);
+  border-right: 1px solid var(--border-subtle);
   color: var(--text-muted);
+  font-size: 11.5px;
   font-variant-numeric: tabular-nums;
   text-align: right;
   user-select: none;
@@ -442,22 +598,76 @@
   background: var(--diff-add-bg);
 }
 
-.u-row--removed .u-gutter,
-.u-row--added .u-gutter {
+.u-row--removed .u-gutter {
+  background: var(--diff-remove-line);
   color: var(--text-secondary);
 }
 
-/* 滚动条 */
-.diff-grid::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+.u-row--removed .u-gutter:first-child {
+  box-shadow: inset 2px 0 0 var(--diff-remove-bar);
 }
 
-.diff-grid::-webkit-scrollbar-thumb {
-  border-radius: 5px;
-  background: var(--surface-3);
+.u-row--added .u-gutter {
+  background: var(--diff-add-line);
+  color: var(--text-secondary);
 }
 
-.diff-grid::-webkit-scrollbar-track {
-  background: transparent;
+.u-row--added .u-gutter:first-child {
+  box-shadow: inset 2px 0 0 var(--diff-add-bar);
+}
+
+/* ---------- 变更概览导航条 ---------- */
+
+.diff-rail {
+  position: relative;
+  flex: none;
+  width: 16px;
+  background: var(--surface-0);
+  border-left: 1px solid var(--border-subtle);
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+
+.diff-rail__marker {
+  position: absolute;
+  left: 3px;
+  width: 9px;
+  min-height: 5px;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  opacity: 0.78;
+  cursor: pointer;
+  transition: opacity 100ms ease, transform 100ms ease;
+}
+
+.diff-rail__marker:hover,
+.diff-rail__marker.is-active {
+  opacity: 1;
+}
+
+.diff-rail__marker.is-active {
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--text-primary) 45%, transparent);
+}
+
+.diff-rail__marker--add {
+  background: var(--color-success);
+}
+
+.diff-rail__marker--remove {
+  background: var(--color-danger);
+}
+
+.diff-rail__marker--modify {
+  background: var(--color-warning);
+}
+
+.diff-rail__thumb {
+  position: absolute;
+  right: 1px;
+  width: 3px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--text-muted) 45%, transparent);
+  pointer-events: none;
 }

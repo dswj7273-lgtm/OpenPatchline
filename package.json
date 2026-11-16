@@ -3,6 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/starcommit/OpenPatchline.git"
+  },
+  "bugs": {
+    "url": "https://github.com/starcommit/OpenPatchline/issues"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

@@ -10,6 +10,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { TokenSpan } from "../../highlighter/tokenizer";
 import type { AlignedRow, RowCell } from "../../types";
+import ChangeRail, {
+  groupChangeBlocks,
+  KIND_LABEL,
+  type ChangeBlock,
+  type ChangeKind,
+} from "./ChangeRail";
 import CodeCell, { CodeContent } from "./CodeCell";
 
 /** 行高（px），对应 docs/06 §6 的 --code-line-height。 */
@@ -92,12 +98,18 @@ function useDiffViewport(lineCount: number, changeIndices: number[], resetKey: u
     [],
   );
 
-  // 切换文件（数据身份变化）时回到顶部。
+  // 切换文件（数据身份变化）时定位：有变更 → 直接跳到第一处变更
+  // （上方留 3 行上下文）；无变更 → 回到顶部。
   useEffect(() => {
     const el = ref.current;
-    if (el) el.scrollTop = 0;
-    setVp((p) => (p.scrollTop === 0 ? p : { ...p, scrollTop: 0 }));
-  }, [resetKey]);
+    const firstChange = changeIndices[0];
+    const top =
+      firstChange !== undefined
+        ? Math.max(0, firstChange * ROW_H - GOTO_PADDING_ROWS * ROW_H)
+        : 0;
+    if (el) el.scrollTop = top;
+    setVp((p) => (p.scrollTop === top ? p : { ...p, scrollTop: top }));
+  }, [resetKey, changeIndices]);
 
   // 跳转到上 / 下一处变更（DiffHeader 派发）。
   useEffect(() => {
@@ -131,7 +143,33 @@ function useDiffViewport(lineCount: number, changeIndices: number[], resetKey: u
 
   const start = Math.max(0, Math.floor(vp.scrollTop / ROW_H) - OVERSCAN);
   const end = Math.min(lineCount, Math.ceil((vp.scrollTop + vp.height) / ROW_H) + OVERSCAN);
-  return { ref, handleScroll, start, end };
+  return { ref, handleScroll, start, end, vp };
+}
+
+/** 滚动到目标行（留出上下文行，与 goto-change 一致）。 */
+function useJumpHandlers(ref: React.RefObject<HTMLDivElement | null>) {
+  const onJumpToRow = useCallback(
+    (row: number) => {
+      const el = ref.current;
+      if (!el) return;
+      el.scrollTo({
+        top: Math.max(0, row * ROW_H - GOTO_PADDING_ROWS * ROW_H),
+        behavior: "smooth",
+      });
+    },
+    [ref],
+  );
+  /** 按比例滚动（0..1，导航条拖拽用；即时跟随，不做平滑）。 */
+  const onScrollTo = useCallback(
+    (fraction: number) => {
+      const el = ref.current;
+      if (!el) return;
+      const scrollable = el.scrollHeight - el.clientHeight;
+      el.scrollTop = Math.max(0, Math.min(scrollable, fraction * scrollable));
+    },
+    [ref],
+  );
+  return { onJumpToRow, onScrollTo };
 }
 
 /** 分栏视图：每行左右两个单元格（spacer 侧为斜纹占位）。 */
@@ -141,7 +179,30 @@ export default function SplitDiffGrid({
   rightTokens,
   changeRowIndices,
 }: SplitDiffGridProps) {
-  const { ref, handleScroll, start, end } = useDiffViewport(rows.length, changeRowIndices, rows);
+  const { ref, handleScroll, start, end, vp } = useDiffViewport(rows.length, changeRowIndices, rows);
+  const { onJumpToRow, onScrollTo } = useJumpHandlers(ref);
+
+  // 变更块（连续变更行聚合）：修改对 / 纯新增 / 纯删除，供导航条着色。
+  const blocks = useMemo<ChangeBlock[]>(() => {
+    const kindOf = (i: number): ChangeKind => {
+      const { left, right } = rows[i];
+      if (left && right) return "modify";
+      if (right) return "add";
+      return "remove";
+    };
+    return groupChangeBlocks(changeRowIndices, kindOf);
+  }, [changeRowIndices, rows]);
+
+  // tooltip：优先新侧行号（对应编辑器里的目标位置）。
+  const labelFor = useCallback(
+    (b: ChangeBlock) => {
+      const first = rows[b.start];
+      const no = first?.right?.lineno ?? first?.left?.lineno;
+      const at = no != null ? `第 ${no} 行起` : `第 ${b.start + 1} 行起`;
+      return `${KIND_LABEL[b.kind]} · ${at} ${b.count} 行`;
+    },
+    [rows],
+  );
 
   const items: ReactNode[] = [];
   for (let i = start; i < end; i++) {
@@ -161,11 +222,23 @@ export default function SplitDiffGrid({
   }
 
   return (
-    <div className="diff-grid" ref={ref} onScroll={handleScroll} role="grid" aria-rowcount={rows.length}>
-      <div className="diff-grid__sizer" style={{ height: rows.length * ROW_H }}>
-        {items}
+    <>
+      <div className="diff-grid" ref={ref} onScroll={handleScroll} role="grid" aria-rowcount={rows.length}>
+        <div className="diff-grid__sizer" style={{ height: rows.length * ROW_H }}>
+          {items}
+        </div>
       </div>
-    </div>
+      <ChangeRail
+        lineCount={rows.length}
+        rowHeight={ROW_H}
+        blocks={blocks}
+        scrollTop={vp.scrollTop}
+        viewportH={vp.height}
+        onJumpToRow={onJumpToRow}
+        onScrollTo={onScrollTo}
+        labelFor={labelFor}
+      />
+    </>
   );
 }
 
@@ -207,7 +280,27 @@ export function UnifiedGrid({ rows, leftTokens, rightTokens }: UnifiedGridProps)
     return { lines, changeLineIndices: changes };
   }, [rows]);
 
-  const { ref, handleScroll, start, end } = useDiffViewport(lines.length, changeLineIndices, lines);
+  const { ref, handleScroll, start, end, vp } = useDiffViewport(lines.length, changeLineIndices, lines);
+  const { onJumpToRow, onScrollTo } = useJumpHandlers(ref);
+
+  // 变更块：统一视图下修改对已拆成先删后增两行，连续聚合后自然记为 modify。
+  const blocks = useMemo<ChangeBlock[]>(
+    () =>
+      groupChangeBlocks(changeLineIndices, (l) =>
+        lines[l].cell.kind === "added" ? "add" : "remove",
+      ),
+    [changeLineIndices, lines],
+  );
+
+  const labelFor = useCallback(
+    (b: ChangeBlock) => {
+      const first = lines[b.start];
+      const no = first?.oldNo ?? first?.newNo;
+      const at = no != null ? `第 ${no} 行起` : `第 ${b.start + 1} 行起`;
+      return `${KIND_LABEL[b.kind]} · ${at} ${b.count} 行`;
+    },
+    [lines],
+  );
 
   const items: ReactNode[] = [];
   for (let i = start; i < end; i++) {
@@ -237,16 +330,28 @@ export function UnifiedGrid({ rows, leftTokens, rightTokens }: UnifiedGridProps)
   }
 
   return (
-    <div
-      className="diff-grid"
-      ref={ref}
-      onScroll={handleScroll}
-      role="grid"
-      aria-rowcount={lines.length}
-    >
-      <div className="diff-grid__sizer" style={{ height: lines.length * ROW_H }}>
-        {items}
+    <>
+      <div
+        className="diff-grid"
+        ref={ref}
+        onScroll={handleScroll}
+        role="grid"
+        aria-rowcount={lines.length}
+      >
+        <div className="diff-grid__sizer" style={{ height: lines.length * ROW_H }}>
+          {items}
+        </div>
       </div>
-    </div>
+      <ChangeRail
+        lineCount={lines.length}
+        rowHeight={ROW_H}
+        blocks={blocks}
+        scrollTop={vp.scrollTop}
+        viewportH={vp.height}
+        onJumpToRow={onJumpToRow}
+        onScrollTo={onScrollTo}
+        labelFor={labelFor}
+      />
+    </>
   );
 }

@@ -1,12 +1,13 @@
 /**
  * DiffHeader 内的紧凑文件下拉列表 — docs/06 §8.4 DiffFileList。
  *
- * 当前文件 "i/N" 徽标，点击展开完整文件清单（状态字母 + 路径 +
+ * 当前文件 "i / N" 徽标，点击展开完整文件清单（状态字母 + 路径 +
  * +/- 统计），选择后切换 diff 文件。
  */
 
 import { useEffect, useRef, useState } from "react";
 import type { ChangeType, ChangedFile } from "../../types";
+import { ChevronDownIcon } from "../Icons";
 
 export interface DiffFileListProps {
   files: ChangedFile[];
@@ -28,15 +29,20 @@ function changeBadge(type: ChangeType): string {
     case "binary":
       return "B";
     case "untracked":
-      return "??";
+      return "U";
   }
+}
+
+function splitPath(path: string): { dir: string; base: string } {
+  const idx = path.lastIndexOf("/");
+  if (idx < 0) return { dir: "", base: path };
+  return { dir: path.slice(0, idx + 1), base: path.slice(idx + 1) };
 }
 
 export default function DiffFileList({ files, currentIndex, onSelect }: DiffFileListProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // 打开时：点击组件外或按 Escape 关闭。
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (e: MouseEvent) => {
@@ -44,8 +50,6 @@ export default function DiffFileList({ files, currentIndex, onSelect }: DiffFile
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        // 阻止冒泡：打开下拉时 Escape 只关闭下拉，不触发 App 层
-        // 的“关闭 diff 视图”（window 级监听在 document 之后触发）。
         e.stopPropagation();
         setOpen(false);
       }
@@ -62,7 +66,7 @@ export default function DiffFileList({ files, currentIndex, onSelect }: DiffFile
     <div className="diff-file-list" ref={rootRef}>
       <button
         type="button"
-        className="diff-file-list__trigger"
+        className={`diff-file-list__trigger${open ? " is-open" : ""}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         title={files[currentIndex]?.path ?? ""}
@@ -71,34 +75,40 @@ export default function DiffFileList({ files, currentIndex, onSelect }: DiffFile
         <span className="diff-file-list__counter">
           {currentIndex + 1} / {files.length}
         </span>
-        <span className="diff-file-list__chevron" aria-hidden="true">
-          ▾
-        </span>
+        <ChevronDownIcon className="diff-file-list__chevron" aria-hidden="true" />
       </button>
       {open && (
         <ul className="diff-file-list__menu" role="listbox" aria-label="变更文件列表">
-          {files.map((f, i) => (
-            <li key={`${i}:${f.path}`} role="option" aria-selected={i === currentIndex}>
-              <button
-                type="button"
-                className={`diff-file-list__item${i === currentIndex ? " is-current" : ""}`}
-                title={f.path}
-                onClick={() => {
-                  onSelect(i);
-                  setOpen(false);
-                }}
-              >
-                <span className={`diff-file-list__badge diff-file-list__badge--${f.changeType}`}>
-                  {changeBadge(f.changeType)}
-                </span>
-                <span className="diff-file-list__path">{f.path}</span>
-                <span className="diff-file-list__stats">
-                  <span className="diff-header__stat-add">+{f.additions}</span>
-                  <span className="diff-header__stat-remove">−{f.deletions}</span>
-                </span>
-              </button>
-            </li>
-          ))}
+          {files.map((f, i) => {
+            const { dir, base } = splitPath(f.path);
+            return (
+              <li key={`${i}:${f.path}`} role="option" aria-selected={i === currentIndex}>
+                <button
+                  type="button"
+                  className={`diff-file-list__item${i === currentIndex ? " is-current" : ""}`}
+                  title={f.path}
+                  onClick={() => {
+                    onSelect(i);
+                    setOpen(false);
+                  }}
+                >
+                  <span className={`diff-file-list__badge diff-file-list__badge--${f.changeType}`}>
+                    {changeBadge(f.changeType)}
+                  </span>
+                  <span className="diff-file-list__path">
+                    {dir && <span className="diff-file-list__dir">{dir}</span>}
+                    <span className="diff-file-list__base">{base}</span>
+                  </span>
+                  {(f.additions > 0 || f.deletions > 0) && (
+                    <span className="diff-file-list__stats">
+                      {f.additions > 0 && <span className="diff-header__stat-add">+{f.additions}</span>}
+                      {f.deletions > 0 && <span className="diff-header__stat-remove">−{f.deletions}</span>}
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

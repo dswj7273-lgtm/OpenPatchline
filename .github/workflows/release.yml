@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    name: macOS ${{ matrix.target }} (.dmg)
+    permissions:
+      contents: write # 创建 Release 并上传资产必需
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # arm64：macos-latest 即 arm64 runner，原生构建
+          - target: aarch64-apple-darwin
+            args: ''
+          # x86_64：在 arm64 runner 上交叉编译
+          # （macos-13 已于 2025-12 退役，不要照抄旧教程的 Intel runner 标签）
+          - target: x86_64-apple-darwin
+            args: '--target x86_64-apple-darwin'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build and upload to GitHub Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # 签名 + 公证路线（需 Apple Developer Program）——启用时取消注释，
+          # 并在仓库 Settings → Secrets and variables → Actions 配置这些 secret。
+          # 未配置时 Tauri 走 ad-hoc 签名，产物仍可正常下载安装（Gatekeeper 提示见 README）。
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # 公证方式一（App 专用密码）：APPLE_ID + APPLE_PASSWORD + APPLE_TEAM_ID
+          # 公证方式二（App Store Connect API）：APPLE_API_KEY + APPLE_API_ISSUER
+        with:
+          tagName: v__VERSION__ # __VERSION__ 取自 tauri.conf.json（回退读 Cargo.toml）
+          releaseName: 'OpenPatchline v__VERSION__'
+          releaseBody: '见附件 Assets 下载对应架构的 .dmg 安装包。'
+          releaseDraft: true # 先出草稿，网页确认后再 Publish
+          prerelease: false
+          args: ${{ matrix.args }}

@@ -193,3 +193,63 @@ export interface AppErrorPayload {
   code: string;
   message: string;
 }
+
+/** 分支类别。 */
+export type BranchKind = "local" | "remote";
+
+/** 单条分支信息（listBranches 返回条目）。 */
+export interface BranchInfo {
+  /** 分支短名（本地如 `main`；远程保留 `origin/main` 形式）。 */
+  name: string;
+  kind: BranchKind;
+  /** 是否为 HEAD 当前分支（仅本地分支可为 true）。 */
+  isCurrent: boolean;
+  /** 上游跟踪分支短名；未配置或远程分支为 null。 */
+  upstream: string | null;
+  /** 领先上游的提交数；无上游时为 null。 */
+  ahead: number | null;
+  /** 落后上游的提交数；无上游时为 null。 */
+  behind: number | null;
+  /** 分支顶端提交 id。 */
+  tipCommit: string;
+}
+
+/** fetchRepository 的返回值。 */
+export interface FetchResult {
+  /** 实际拉取的远程名（如 `origin`）。 */
+  remote: string;
+  /** git 输出摘要（尾部若干行）。 */
+  output: string;
+}
+
+/** pullRepository 的返回值。 */
+export interface PullResult {
+  /** git 输出摘要。 */
+  output: string;
+  /** 拉取后的仓库信息（HEAD 可能已移动）。 */
+  repo: RepoInfo;
+}
+
+/** pushRepository 的返回值。 */
+export interface PushResult {
+  /** git 输出摘要。 */
+  output: string;
+  /** 推送后的仓库信息（HEAD 不变）。 */
+  repo: RepoInfo;
+}
+
+/** 贮藏栈条目。 */
+export interface StashEntry {
+  index: number;
+  id: string;
+  message: string;
+}
+
+/** 通用 Git 写操作结果。 */
+export interface GitActionResult {
+  output: string;
+  repo: RepoInfo;
+}
+
+/** reset_head 模式。 */
+export type ResetMode = "soft" | "mixed" | "hard";

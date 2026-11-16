@@ -7,13 +7,21 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  BranchInfo,
   ChangedFile,
   DiffScope,
+  FetchResult,
   FileDiffResult,
   FileStatus,
+  GitActionResult,
   GraphPage,
   LogFilter,
   OpenRepositoryOutcome,
+  PullResult,
+  PushResult,
+  RepoInfo,
+  ResetMode,
+  StashEntry,
 } from "../types";
 
 /**
@@ -67,4 +75,140 @@ export function unstageFile(repoId: string, path: string): Promise<void> {
 /** 提交当前暂存区，返回新提交 id。 */
 export function createCommit(repoId: string, message: string): Promise<string> {
   return invoke<string>("create_commit", { repoId, message });
+}
+
+/** 列出本地与远程分支（含当前标记、上游与 ahead/behind）。 */
+export function listBranches(repoId: string): Promise<BranchInfo[]> {
+  return invoke<BranchInfo[]>("list_branches", { repoId });
+}
+
+/** 切换分支（本地直接切换；远程检出为新的本地跟踪分支），返回切换后的仓库信息。 */
+export function checkoutBranch(repoId: string, name: string): Promise<RepoInfo> {
+  return invoke<RepoInfo>("checkout_branch", { repoId, name });
+}
+
+/** 从远程拉取（fetch，不合并）；remote 为 null 时取默认远程（origin 优先）。 */
+export function fetchRepository(repoId: string, remote: string | null): Promise<FetchResult> {
+  return invoke<FetchResult>("fetch_repository", { repoId, remote });
+}
+
+/** 拉取并合并到当前分支（pull，遵循仓库 merge/rebase 配置）。 */
+export function pullRepository(repoId: string): Promise<PullResult> {
+  return invoke<PullResult>("pull_repository", { repoId });
+}
+
+/** 推送当前分支（push；无上游时建立跟踪后推送）。 */
+export function pushRepository(repoId: string): Promise<PushResult> {
+  return invoke<PushResult>("push_repository", { repoId });
+}
+
+/** 获取全部远程并清理失效远程分支。 */
+export function fetchAllRemotes(repoId: string): Promise<GitActionResult> {
+  return invoke<GitActionResult>("fetch_all_remotes", { repoId });
+}
+
+/** 使用 rebase + autostash 拉取当前分支。 */
+export function pullRebaseRepository(repoId: string): Promise<PullResult> {
+  return invoke<PullResult>("pull_rebase_repository", { repoId });
+}
+
+/** 安全强推当前分支（--force-with-lease）。 */
+export function pushForceWithLeaseRepository(repoId: string): Promise<PushResult> {
+  return invoke<PushResult>("push_force_with_lease_repository", { repoId });
+}
+
+/** 推送全部本地标签到默认远程。 */
+export function pushTagsRepository(repoId: string): Promise<PushResult> {
+  return invoke<PushResult>("push_tags_repository", { repoId });
+}
+
+/** 创建本地分支（可选基于 startPoint 与立即切换）。 */
+export function createBranch(
+  repoId: string,
+  name: string,
+  startPoint: string | null,
+  checkout: boolean,
+): Promise<GitActionResult> {
+  return invoke<GitActionResult>("create_branch", { repoId, name, startPoint, checkout });
+}
+
+/** 删除本地分支。 */
+export function deleteBranch(
+  repoId: string,
+  name: string,
+  force: boolean,
+): Promise<GitActionResult> {
+  return invoke<GitActionResult>("delete_branch", { repoId, name, force });
+}
+
+/** 合并指定分支到当前分支。 */
+export function mergeBranch(repoId: string, name: string): Promise<GitActionResult> {
+  return invoke<GitActionResult>("merge_branch", { repoId, name });
+}
+
+/** 创建标签。 */
+export function createTag(
+  repoId: string,
+  name: string,
+  target: string | null,
+): Promise<GitActionResult> {
+  return invoke<GitActionResult>("create_tag", { repoId, name, target });
+}
+
+/** 挑选提交到当前分支（cherry-pick）。 */
+export function cherryPickCommit(repoId: string, commitId: string): Promise<GitActionResult> {
+  return invoke<GitActionResult>("cherry_pick_commit", { repoId, commitId });
+}
+
+/** 生成反向提交撤销指定提交（revert）。 */
+export function revertCommit(repoId: string, commitId: string): Promise<GitActionResult> {
+  return invoke<GitActionResult>("revert_commit", { repoId, commitId });
+}
+
+/** 重置 HEAD 到指定目标提交。 */
+export function resetHead(
+  repoId: string,
+  target: string,
+  mode: ResetMode,
+): Promise<GitActionResult> {
+  return invoke<GitActionResult>("reset_head", { repoId, target, mode });
+}
+
+/** 丢弃单个未暂存或未跟踪文件的更改。 */
+export function discardFile(repoId: string, path: string): Promise<void> {
+  return invoke<void>("discard_file", { repoId, path });
+}
+
+/** 丢弃工作区与暂存区的全部更改。 */
+export function discardAll(repoId: string): Promise<GitActionResult> {
+  return invoke<GitActionResult>("discard_all", { repoId });
+}
+
+/** 修正最近一次提交。 */
+export function amendCommit(repoId: string, message: string): Promise<GitActionResult> {
+  return invoke<GitActionResult>("amend_commit", { repoId, message });
+}
+
+/** 列出贮藏栈条目。 */
+export function listStashes(repoId: string): Promise<StashEntry[]> {
+  return invoke<StashEntry[]>("list_stashes", { repoId });
+}
+
+/** 贮藏当前更改与未跟踪文件。 */
+export function stashPush(repoId: string, message: string | null): Promise<GitActionResult> {
+  return invoke<GitActionResult>("stash_push", { repoId, message });
+}
+
+/** 应用或弹出指定贮藏条目。 */
+export function stashApply(
+  repoId: string,
+  index: number,
+  pop: boolean,
+): Promise<GitActionResult> {
+  return invoke<GitActionResult>("stash_apply", { repoId, index, pop });
+}
+
+/** 删除指定贮藏条目。 */
+export function stashDrop(repoId: string, index: number): Promise<GitActionResult> {
+  return invoke<GitActionResult>("stash_drop", { repoId, index });
 }

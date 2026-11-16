@@ -6,11 +6,11 @@
  * - 滚动接近底部（剩 600px）时自动加载下一页；
  * - 过滤条件变化导致首页 commit 变化时，自动回到顶部。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { UIEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, UIEvent } from "react";
 import { useAppStore } from "../../store/app";
 import type { CommitGraphRow, RefLabel } from "../../types";
-import { CommitGraph, OVERSCAN, ROW_H } from "./CommitGraph";
+import { CommitGraph, OVERSCAN, ROW_H, computeGraphWidth } from "./CommitGraph";
 import "./CommitTable.css";
 
 /** 距底部剩余多少像素时触发加载下一页。 */
@@ -59,7 +59,6 @@ export function CommitTable() {
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(0);
 
-  // 视口高度（窗口缩放）变化时重算窗口。
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -71,8 +70,8 @@ export function CommitTable() {
   }, []);
 
   const totalHeight = rows.length * ROW_H;
+  const graphWidth = useMemo(() => computeGraphWidth(rows), [rows]);
 
-  // 首行 commit 变化（过滤 / 换仓库 / 重建图）时回到顶部；翻页追加不动。
   const firstIdRef = useRef<string | null>(null);
   useEffect(() => {
     const firstId = rows.length > 0 ? rows[0].commit.id : null;
@@ -91,7 +90,6 @@ export function CommitTable() {
     }
   }, [hasMore, graphLoading, totalHeight, loadMoreCommits]);
 
-  // 行数 / 视口变化后复查（例如过滤后内容不足一屏时补页）。
   useEffect(() => {
     maybeLoadMore();
   }, [maybeLoadMore]);
@@ -107,9 +105,13 @@ export function CommitTable() {
   for (let i = start; i < end; i++) windowRows.push({ row: rows[i], index: i });
 
   return (
-    <section className="commit-table" aria-label="提交列表">
+    <section
+      className="commit-table"
+      style={{ "--graph-col-w": `${graphWidth}px` } as CSSProperties}
+      aria-label="提交列表"
+    >
       <div className="commit-table-header" aria-hidden="true">
-        <span className="cth-graph">图形</span>
+        <span className="cth-graph">泳道</span>
         <span className="cth-msg">提交信息</span>
         <span className="cth-author">作者</span>
         <span className="cth-date">时间</span>
@@ -123,7 +125,12 @@ export function CommitTable() {
         aria-label="提交历史"
       >
         <div className="commit-table-inner" style={{ height: totalHeight }}>
-          <CommitGraph rows={rows} scrollTop={scrollTop} viewportH={viewportH} />
+          <CommitGraph
+            rows={rows}
+            graphWidth={graphWidth}
+            scrollTop={scrollTop}
+            viewportH={viewportH}
+          />
           {windowRows.map(({ row, index }) => (
             <div
               key={row.commit.id}
@@ -133,10 +140,10 @@ export function CommitTable() {
               aria-rowindex={index + 1}
               onClick={() => void selectCommit(row.commit.id)}
             >
-              {/* 图形格保持透明，内容全部由 canvas 绘制。 */}
               <span className="ct-graph" aria-hidden="true" />
               <div className="ct-content" role="presentation">
                 <div className="ct-msg" role="gridcell" title={row.commit.message}>
+                  <span className="ct-hash">{row.commit.shortId}</span>
                   <span className="ct-msg-text">{row.commit.message}</span>
                   {row.commit.refs.map(ref => (
                     <span key={`${ref.kind}:${ref.name}`} className={refBadgeClass(ref.kind)}>
@@ -155,7 +162,7 @@ export function CommitTable() {
           ))}
         </div>
         {rows.length === 0 && (
-          <div className="commit-table-empty">{graphLoading ? "加载中…" : "暂无提交"}</div>
+          <div className="commit-table-empty">{graphLoading ? "加载提交历史…" : "暂无匹配的提交"}</div>
         )}
       </div>
     </section>

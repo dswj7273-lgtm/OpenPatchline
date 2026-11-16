@@ -135,10 +135,18 @@ pub fn compute_change_row_indices(rows: &[AlignedRow]) -> Vec<usize> {
 pub fn compute_stats(rows: &[AlignedRow]) -> (u32, u32) {
     let (mut additions, mut deletions) = (0usize, 0usize);
     for row in rows {
-        if row.right.as_ref().is_some_and(|c| c.kind == LineKind::Added) {
+        if row
+            .right
+            .as_ref()
+            .is_some_and(|c| c.kind == LineKind::Added)
+        {
             additions += 1;
         }
-        if row.left.as_ref().is_some_and(|c| c.kind == LineKind::Removed) {
+        if row
+            .left
+            .as_ref()
+            .is_some_and(|c| c.kind == LineKind::Removed)
+        {
             deletions += 1;
         }
     }
@@ -176,11 +184,7 @@ fn normalize_ws_into(out: &mut String, s: &str) {
 }
 
 /// 行内建为 id：相同（或规范化后相同）内容的行共享同一 id。
-fn intern_lines(
-    lines: &[&str],
-    ignore_ws: bool,
-    table: &mut HashMap<Box<str>, u32>,
-) -> Vec<u32> {
+fn intern_lines(lines: &[&str], ignore_ws: bool, table: &mut HashMap<Box<str>, u32>) -> Vec<u32> {
     let mut ids = Vec::with_capacity(lines.len());
     let mut norm = String::new();
     for &line in lines {
@@ -235,11 +239,7 @@ fn diff_rec(
     }
 
     // 公共前后缀（每层都裁剪，显著约束递归规模）
-    let p = old
-        .iter()
-        .zip(new)
-        .take_while(|(a, b)| a == b)
-        .count();
+    let p = old.iter().zip(new).take_while(|(a, b)| a == b).count();
     let s = old
         .iter()
         .rev()
@@ -523,8 +523,8 @@ fn myers_core<T: Eq>(am: &[T], bm: &[T], a_off: usize, b_off: usize, out: &mut V
         let mut hit = false;
         let mut k = -d;
         while k <= d {
-            let down = k == -d
-                || (k != d && v[(k - 1 + max_d) as usize] < v[(k + 1 + max_d) as usize]);
+            let down =
+                k == -d || (k != d && v[(k - 1 + max_d) as usize] < v[(k + 1 + max_d) as usize]);
             let mut x = if down {
                 v[(k + 1 + max_d) as usize]
             } else {
@@ -589,13 +589,9 @@ fn myers_core<T: Eq>(am: &[T], bm: &[T], a_off: usize, b_off: usize, out: &mut V
             });
         }
         if down {
-            segs.push(Seg::Ins {
-                b: prev_y as usize,
-            });
+            segs.push(Seg::Ins { b: prev_y as usize });
         } else {
-            segs.push(Seg::Del {
-                a: prev_x as usize,
-            });
+            segs.push(Seg::Del { a: prev_x as usize });
         }
         x = prev_x;
         y = prev_y;
@@ -694,7 +690,10 @@ mod tests {
         // 完全无公共行的区域
         ("1\n2\n3\n", "x\ny\nz\nw\n"),
         // 纯空白差异（ignore_whitespace 关闭时是修改对）
-        ("fn f() {\n    return 1;\n}\n", "fn f() {\n\treturn 1;   \n}\n"),
+        (
+            "fn f() {\n    return 1;\n}\n",
+            "fn f() {\n\treturn 1;   \n}\n",
+        ),
         // 整文件行尾风格翻转（CRLF -> LF）
         ("a\r\nb\r\nc\r\n", "a\nb\nc\n"),
         // 仅末行换行终结符（EOF '\n'）不同
@@ -741,13 +740,16 @@ mod tests {
                 "row {i}: 两侧均为 None"
             );
             for (cell, last) in [(&row.left, &mut last_old), (&row.right, &mut last_new)] {
-                if let Some(c) = cell {
-                    if let Some(n) = c.lineno {
-                        if let Some(l) = *last {
-                            assert!(n > l, "row {i}: 行号未严格递增 ({l} -> {n})");
-                        }
-                        *last = Some(n);
-                    }
+                if let Some(c) = cell
+                    && let Some(n) = c.lineno
+                    && let Some(l) = *last
+                {
+                    assert!(n > l, "row {i}: 行号未严格递增 ({l} -> {n})");
+                }
+                if let Some(c) = cell
+                    && let Some(n) = c.lineno
+                {
+                    *last = Some(n);
                 }
             }
             if let (Some(l), Some(r)) = (&row.left, &row.right) {
@@ -762,7 +764,11 @@ mod tests {
                 } else {
                     l.content == r.content
                 };
-                assert!(eq, "row {i}: 上下文行内容不一致 {:?} != {:?}", l.content, r.content);
+                assert!(
+                    eq,
+                    "row {i}: 上下文行内容不一致 {:?} != {:?}",
+                    l.content, r.content
+                );
             }
         }
     }
@@ -808,7 +814,9 @@ mod tests {
         let rows = diff("x\ny\nz\n", "x\ny\nz\n");
         assert!(rows.iter().all(|r| {
             r.left.as_ref().is_some_and(|c| c.kind == LineKind::Context)
-                && r.right.as_ref().is_some_and(|c| c.kind == LineKind::Context)
+                && r.right
+                    .as_ref()
+                    .is_some_and(|c| c.kind == LineKind::Context)
         }));
         assert_eq!(compute_change_row_indices(&rows), Vec::<usize>::new());
         assert_eq!(compute_stats(&rows), (0, 0));
@@ -894,7 +902,10 @@ mod tests {
             rows[0].left.as_ref().map(|c| c.content.as_str()),
             Some("a\r")
         );
-        assert_eq!(rows[0].right.as_ref().map(|c| c.content.as_str()), Some("a"));
+        assert_eq!(
+            rows[0].right.as_ref().map(|c| c.content.as_str()),
+            Some("a")
+        );
         assert_eq!(rebuild_new(&rows), lines_of("a\nb\nc\n"));
         assert_eq!(rebuild_old(&rows), lines_of("a\r\nb\r\nc\r\n"));
         assert_invariants(&rows, false);
@@ -1044,14 +1055,20 @@ mod tests {
                 .as_ref()
                 .is_some_and(|c| c.kind == LineKind::Removed)
             {
-                out.push(format!("-{}", row.left.as_ref().map(|c| &c.content).unwrap()));
+                out.push(format!(
+                    "-{}",
+                    row.left.as_ref().map(|c| &c.content).unwrap()
+                ));
             }
             if row
                 .right
                 .as_ref()
                 .is_some_and(|c| c.kind == LineKind::Added)
             {
-                out.push(format!("+{}", row.right.as_ref().map(|c| &c.content).unwrap()));
+                out.push(format!(
+                    "+{}",
+                    row.right.as_ref().map(|c| &c.content).unwrap()
+                ));
             }
         }
         out

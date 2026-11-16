@@ -1,34 +1,32 @@
 /*
- * 语法 token 颜色（深色主题）— docs/05 §10 / docs/06 §5。
+ * 语法 token 颜色（深色 + 浅色主题）— docs/05 §10 / docs/06 §5。
  * 只定义 tok-* 类；基础色板（--text-*）来自 theme.css。
- * 浅色主题后续按 :root[data-theme="light"] 覆盖。
- * 色值取 One Dark 系，保证在 --diff-add-bg / --diff-remove-bg
- * 的着色行背景上仍可读。
+ * 色值保证在 --diff-add-bg / --diff-remove-bg 着色行背景上清晰可读。
  */
 
 .tok-kw {
-  color: #c678dd;
+  color: #c792ea;
 }
 
 .tok-str {
-  color: #98c379;
+  color: #a9d18e;
 }
 
 .tok-num {
-  color: #d19a66;
+  color: #f78c6c;
 }
 
 .tok-com {
-  color: #7f848e;
+  color: #6b7385;
   font-style: italic;
 }
 
 .tok-fn {
-  color: #61afef;
+  color: #79b8ff;
 }
 
 .tok-type {
-  color: #e5c07b;
+  color: #ffcb6b;
 }
 
 .tok-var {
@@ -36,17 +34,58 @@
 }
 
 .tok-op {
-  color: #56b6c2;
+  color: #89ddff;
 }
 
 .tok-punct {
-  color: #828997;
+  color: #8a94a6;
 }
 
 .tok-atom {
-  color: #d19a66;
+  color: #f78c6c;
 }
 
 .tok-prop {
-  color: #e06c75;
+  color: #f07178;
+}
+
+/* 浅色主题（高对比度 GitHub Light / One Light 调色） */
+:root[data-theme="light"] .tok-kw {
+  color: #9b2393;
+}
+
+:root[data-theme="light"] .tok-str {
+  color: #22863a;
+}
+
+:root[data-theme="light"] .tok-num {
+  color: #b45309;
+}
+
+:root[data-theme="light"] .tok-com {
+  color: #6e7781;
+}
+
+:root[data-theme="light"] .tok-fn {
+  color: #0969da;
+}
+
+:root[data-theme="light"] .tok-type {
+  color: #953800;
+}
+
+:root[data-theme="light"] .tok-op {
+  color: #0e7490;
+}
+
+:root[data-theme="light"] .tok-punct {
+  color: #57606a;
+}
+
+:root[data-theme="light"] .tok-atom {
+  color: #0550ae;
+}
+
+:root[data-theme="light"] .tok-prop {
+  color: #cf222e;
 }

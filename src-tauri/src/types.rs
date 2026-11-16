@@ -284,6 +284,87 @@ pub struct FileStatus {
     pub unstaged: Option<ChangeType>,
 }
 
+/// 分支类别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BranchKind {
+    /// 本地分支（refs/heads/…）。
+    Local,
+    /// 远程跟踪分支（refs/remotes/…）。
+    Remote,
+}
+
+/// 单条分支信息（命令 `list_branches` 的返回条目）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchInfo {
+    /// 分支短名（本地如 `main`；远程保留 `origin/main` 形式）。
+    pub name: String,
+    pub kind: BranchKind,
+    /// 是否为 HEAD 当前分支（仅本地分支可为 true）。
+    pub is_current: bool,
+    /// 上游跟踪分支短名（如 `origin/main`）；未配置或远程分支为 None。
+    pub upstream: Option<String>,
+    /// 领先上游的提交数；无上游时为 None。
+    pub ahead: Option<usize>,
+    /// 落后上游的提交数；无上游时为 None。
+    pub behind: Option<usize>,
+    /// 分支顶端提交 id。
+    pub tip_commit: String,
+}
+
+/// fetch 结果（命令 `fetch_repository` 的返回值）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchResult {
+    /// 实际拉取的远程名（如 `origin`）。
+    pub remote: String,
+    /// git 输出摘要（stdout + stderr 规整后，供前端展示）。
+    pub output: String,
+}
+
+/// pull 结果（命令 `pull_repository` 的返回值）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullResult {
+    /// git 输出摘要。
+    pub output: String,
+    /// 拉取后的仓库信息（HEAD 可能已移动）。
+    pub repo: RepoInfo,
+}
+
+/// push 结果（命令 `push_repository` 的返回值）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushResult {
+    /// git 输出摘要。
+    pub output: String,
+    /// 推送后的仓库信息（HEAD 不变，供前端统一刷新）。
+    pub repo: RepoInfo,
+}
+
+/// 贮藏栈条目（命令 `list_stashes` 的返回条目）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StashEntry {
+    /// 贮藏槽位索引（对应 `stash@{index}`）。
+    pub index: usize,
+    /// 短 commit hash。
+    pub id: String,
+    /// 贮藏说明信息。
+    pub message: String,
+}
+
+/// 通用 Git 写操作结果（返回输出摘要与刷新后的仓库信息）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitActionResult {
+    /// git 输出摘要。
+    pub output: String,
+    /// 操作后的仓库信息。
+    pub repo: RepoInfo,
+}
+
 /// diff 范围类别（命令参数）。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

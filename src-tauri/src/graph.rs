@@ -263,9 +263,7 @@ impl GraphState {
 
     /// 找到预留（强或弱）`id` 的第一个槽位下标。
     fn find_reserved(&self, id: &str) -> Option<usize> {
-        self.lanes
-            .iter()
-            .position(|s| s.waiting_id() == Some(id))
+        self.lanes.iter().position(|s| s.waiting_id() == Some(id))
     }
 
     /// 找到最早的弱预留（悬空延续线）槽位下标。
@@ -600,20 +598,37 @@ mod tests {
         assert_eq!(paged.len(), full.len());
         for (i, (paged, single_row)) in paged.iter().zip(full.iter()).enumerate() {
             assert_eq!(paged.commit.id, single_row.commit.id, "第 {i} 行提交应一致");
-            assert_eq!(paged.lane_index, single_row.lane_index, "第 {i} 行 lane 应一致");
+            assert_eq!(
+                paged.lane_index, single_row.lane_index,
+                "第 {i} 行 lane 应一致"
+            );
             assert_eq!(
                 paged.lane_count, single_row.lane_count,
                 "第 {i} 行 lane_count 应一致"
             );
-            assert_eq!(segs(paged, true), segs(single_row, true), "第 {i} 行 below 应一致");
+            assert_eq!(
+                segs(paged, true),
+                segs(single_row, true),
+                "第 {i} 行 below 应一致"
+            );
         }
 
         // 不变量：任何行的连线引用不得超过 lane_count。
         for row in paged.into_iter().chain(full.iter()) {
             let bound = row.lane_count;
-            for conn in row.connections_above.iter().chain(row.connections_below.iter()) {
-                assert!(conn.from_lane < bound, "from_lane {conn:?} 越界（lane_count={bound}）");
-                assert!(conn.to_lane < bound, "to_lane {conn:?} 越界（lane_count={bound}）");
+            for conn in row
+                .connections_above
+                .iter()
+                .chain(row.connections_below.iter())
+            {
+                assert!(
+                    conn.from_lane < bound,
+                    "from_lane {conn:?} 越界（lane_count={bound}）"
+                );
+                assert!(
+                    conn.to_lane < bound,
+                    "to_lane {conn:?} 越界（lane_count={bound}）"
+                );
             }
         }
     }

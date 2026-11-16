@@ -11,8 +11,8 @@ use std::path::Path;
 use crate::diff_engine::{self, DiffOptions as TextDiffOptions};
 use crate::error::{AppError, AppResult};
 use crate::types::{
-    ChangedFile, ChangeType, ChildRepo, CommitNode, FileDiffResult, FileStatus, LogFilter, RefKind,
-    RefLabel, RepoInfo,
+    BranchInfo, BranchKind, ChangeType, ChangedFile, ChildRepo, CommitNode, FileDiffResult,
+    FileStatus, LogFilter, RefKind, RefLabel, RepoInfo,
 };
 
 /// 二进制内容嗅探窗口（字节）：前 8KB 出现 NUL 即视为二进制。
@@ -264,7 +264,11 @@ pub fn file_diff_commit(
     let old = if status == git2::Delta::Added {
         None
     } else {
-        blob_bytes_from_tree(repo, parent_tree.as_ref(), old_path.as_deref().unwrap_or(path))?
+        blob_bytes_from_tree(
+            repo,
+            parent_tree.as_ref(),
+            old_path.as_deref().unwrap_or(path),
+        )?
     };
     let new = if status == git2::Delta::Deleted {
         None
@@ -304,7 +308,11 @@ pub fn file_diff_staged(repo: &git2::Repository, path: &str) -> AppResult<FileDi
     let old = if status == git2::Delta::Added {
         None
     } else {
-        blob_bytes_from_tree(repo, head_tree.as_ref(), old_path.as_deref().unwrap_or(path))?
+        blob_bytes_from_tree(
+            repo,
+            head_tree.as_ref(),
+            old_path.as_deref().unwrap_or(path),
+        )?
     };
     let new = if status == git2::Delta::Deleted {
         None
@@ -469,7 +477,7 @@ pub fn stage_file(repo: &mut git2::Repository, path: &str) -> AppResult<()> {
 pub fn unstage_file(repo: &mut git2::Repository, path: &str) -> AppResult<()> {
     match head_commit(repo)? {
         Some(head) => {
-            repo.reset_default(Some(head.as_object()), &[path])
+            repo.reset_default(Some(head.as_object()), [path])
                 .map_err(|e| AppError::Git(format!("重置 {path} 到 HEAD 失败: {e}")))?;
         }
         None => {
@@ -495,6 +503,10 @@ pub fn unstage_file(repo: &mut git2::Repository, path: &str) -> AppResult<()> {
 /// - 树取 `index.write_tree`；签名优先取仓库配置 `repo.signature()`，
 ///   缺失时回退到内置默认签名（如 "OpenPatchline <openpatchline@local>"）；
 /// - 父提交为 HEAD；无 HEAD（空仓库首提交）时无父；
+/// - 合并进行中（存在 MERGE_HEAD，如冲突 pull 解决后提交）：把
+///   MERGE_HEAD 记为第二父提交，并在提交成功后清除 MERGE_HEAD /
+///   MERGE_MSG / MERGE_MODE，收尾合并（与 git CLI 行为一致，libgit2
+///   不会自动清理）；
 ///   提交后更新 HEAD（处于分支上时更新分支引用，分离 HEAD 时移动 HEAD）。
 pub fn create_commit(repo: &mut git2::Repository, message: &str) -> AppResult<String> {
     let signature = commit_signature(repo)?;
@@ -508,15 +520,261 @@ pub fn create_commit(repo: &mut git2::Repository, message: &str) -> AppResult<St
         .find_tree(tree_oid)
         .map_err(|e| AppError::Git(format!("读取树 {tree_oid} 失败: {e}")))?;
 
-    let parents: Vec<git2::Commit<'_>> = match head_commit(repo)? {
+    // 合并进行中：MERGE_HEAD 作为第二父提交。
+    let merge_head = repo
+        .find_reference("MERGE_HEAD")
+        .ok()
+        .map(|r| r.peel_to_commit())
+        .transpose()
+        .map_err(|e| AppError::Git(format!("解析 MERGE_HEAD 失败: {e}")))?;
+
+    let mut parents: Vec<git2::Commit<'_>> = match head_commit(repo)? {
         Some(head) => vec![head],
         None => Vec::new(),
     };
+    if let Some(merge_commit) = &merge_head {
+        parents.push(merge_commit.clone());
+        if parents.len() == 1 {
+            return Err(AppError::Git(
+                "合并进行中但 HEAD 不存在，状态异常".to_string(),
+            ));
+        }
+    }
     let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
     let oid = repo
-        .commit(Some("HEAD"), &signature, &signature, message, &tree, &parent_refs)
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &parent_refs,
+        )
         .map_err(|e| AppError::Git(format!("创建提交失败: {e}")))?;
+
+    // 提交成功后收尾合并：删除 MERGE_HEAD 引用与 MERGE_MSG / MERGE_MODE
+    // 文件（尽力而为，失败不影响已创建的提交）。
+    if merge_head.is_some() {
+        if let Ok(mut reference) = repo.find_reference("MERGE_HEAD") {
+            let _ = reference.delete();
+        }
+        let gitdir = repo.path(); // .git 目录本身（MERGE_MSG / MERGE_MODE 所在）
+        for file in ["MERGE_MSG", "MERGE_MODE"] {
+            let _ = std::fs::remove_file(gitdir.join(file));
+        }
+    }
     Ok(oid.to_string())
+}
+
+/// 列出本地与远程分支（本地在前，各组内按名称排序）。
+///
+/// - 本地分支附带上游跟踪信息与 ahead/behind 计数（`graph_ahead_behind`，
+///   无上游时均为 None）；
+/// - HEAD 当前分支标记 `is_current`（分离 HEAD 时无当前分支）；
+/// - 远程分支的符号引用（如 `origin/HEAD`）跳过；
+/// - 空仓库（unborn HEAD）返回空列表。
+pub fn list_branches(repo: &git2::Repository) -> AppResult<Vec<BranchInfo>> {
+    // 当前分支短名（分支头才有；分离 HEAD / unborn 均为 None）。
+    let head_name = repo
+        .head()
+        .ok()
+        .filter(|h| h.is_branch())
+        .and_then(|h| h.shorthand().ok().map(str::to_string));
+
+    let mut locals: Vec<BranchInfo> = Vec::new();
+    let mut remotes: Vec<BranchInfo> = Vec::new();
+    let branches = repo
+        .branches(None)
+        .map_err(|e| AppError::Git(format!("枚举分支失败: {e}")))?;
+    for entry in branches {
+        let (branch, branch_type) =
+            entry.map_err(|e| AppError::Git(format!("枚举分支失败: {e}")))?;
+        // 符号引用（origin/HEAD 等）不是可检出的分支，跳过。
+        if branch.get().symbolic_target().ok().flatten().is_some() {
+            continue;
+        }
+        let Some(name) = branch.name().ok().flatten().map(str::to_string) else {
+            continue; // 非 UTF-8 分支名
+        };
+        let commit = branch
+            .get()
+            .peel_to_commit()
+            .map_err(|e| AppError::Git(format!("解析分支 {name} 顶端提交失败: {e}")))?;
+
+        match branch_type {
+            git2::BranchType::Local => {
+                let is_current = head_name.as_deref() == Some(name.as_str());
+                // 上游跟踪：读取 branch.<name>.remote/merge 配置并计算领先/落后。
+                let (upstream, ahead, behind) = match branch.upstream() {
+                    Ok(upstream_branch) => {
+                        let upstream_name =
+                            upstream_branch.name().ok().flatten().map(str::to_string);
+                        let ahead_behind = upstream_name.as_deref().and_then(|_| {
+                            upstream_branch
+                                .get()
+                                .peel_to_commit()
+                                .ok()
+                                .and_then(|up_commit| {
+                                    repo.graph_ahead_behind(commit.id(), up_commit.id()).ok()
+                                })
+                        });
+                        match (upstream_name, ahead_behind) {
+                            (Some(u), Some((a, b))) => (Some(u), Some(a), Some(b)),
+                            (Some(u), None) => (Some(u), None, None),
+                            _ => (None, None, None),
+                        }
+                    }
+                    Err(_) => (None, None, None),
+                };
+                locals.push(BranchInfo {
+                    name,
+                    kind: BranchKind::Local,
+                    is_current,
+                    upstream,
+                    ahead,
+                    behind,
+                    tip_commit: commit.id().to_string(),
+                });
+            }
+            git2::BranchType::Remote => remotes.push(BranchInfo {
+                name,
+                kind: BranchKind::Remote,
+                is_current: false,
+                upstream: None,
+                ahead: None,
+                behind: None,
+                tip_commit: commit.id().to_string(),
+            }),
+        }
+    }
+    locals.sort_by(|a, b| a.name.cmp(&b.name));
+    remotes.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok([locals, remotes].concat())
+}
+
+/// 切换分支（checkout）。
+///
+/// - `name` 为本地分支：SAFE 策略检出（保留不冲突的本地修改，
+///   会覆盖的修改则报错），再把 HEAD 指向 `refs/heads/<name>`；
+/// - `name` 为远程分支（如 `origin/dev`；远程名含 `/` 时按已配置远程
+///   最长前缀匹配拆分，见 [`split_remote_branch`]）：
+///   - 同名本地短分支（`dev`）已存在 → 切换到该本地分支；
+///   - 不存在 → 检出成功后从远程分支创建本地跟踪分支
+///     （`branch.<name>.remote/merge` 已配置），等价于 `git checkout dev`
+///     的 DWIM 行为——分支与配置只在检出成功后落盘，失败不残留
+///     （与 git CLI 一致）；
+/// - 分支不存在报 [`AppError::NotFound`]；检出冲突报 [`AppError::Git`]
+///   （消息含 libgit2 的冲突文件说明）。
+pub fn checkout_branch(repo: &mut git2::Repository, name: &str) -> AppResult<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::InvalidArg("分支名不能为空".to_string()));
+    }
+    if !git2::Reference::is_valid_name(&format!("refs/heads/{name}")) {
+        return Err(AppError::InvalidArg(format!("非法分支名: {name}")));
+    }
+
+    /// 检出目标：既有本地分支，或待创建的远程跟踪分支。
+    enum Target {
+        /// 切到 refs/heads/<name>。
+        Local(String),
+        /// 检出 origin 侧提交，成功后创建本地跟踪分支 <short>。
+        CreateTracking { short: String },
+    }
+
+    let target = if repo.find_branch(name, git2::BranchType::Local).is_ok() {
+        Target::Local(name.to_string())
+    } else if repo.find_branch(name, git2::BranchType::Remote).is_ok() {
+        // 远程分支：按已配置远程做最长前缀匹配拆出（远程名，本地短名）。
+        // 远程名本身可含 '/'（如 my/remote），不能简单按首段拆分。
+        let (_remote_name, short) = split_remote_branch(repo, name)?;
+        if repo.find_branch(&short, git2::BranchType::Local).is_ok() {
+            // 本地短分支已存在：切换到它（与 git checkout <short> 一致）。
+            Target::Local(short)
+        } else {
+            Target::CreateTracking { short }
+        }
+    } else {
+        return Err(AppError::NotFound(format!("分支不存在: {name}")));
+    };
+
+    // 解析目标提交（本地分支 → refs/heads/<name>；DWIM → 远程分支名），
+    // 先检出其树（SAFE：默认拒绝覆盖未提交修改）。DWIM 的分支与跟踪
+    // 配置留到检出成功后再创建，避免失败残留。树在块作用域内释放，
+    // 之后的 create_tracking_branch 才能 `&mut` 借用 repo。
+    {
+        let (target_name, tree) = match &target {
+            Target::Local(branch) => (branch.clone(), branch_tree(repo, branch)?),
+            Target::CreateTracking { short: _ } => (name.to_string(), branch_tree(repo, name)?),
+        };
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.safe();
+        repo.checkout_tree(tree.as_object(), Some(&mut checkout))
+            .map_err(|e| {
+                AppError::Git(format!(
+                    "切换到分支 {target_name} 失败（本地有未提交修改会被覆盖时请先提交或暂存）: {e}"
+                ))
+            })?;
+    }
+
+    // 检出成功：DWIM 场景先创建本地跟踪分支（含跟踪配置），再移动 HEAD。
+    let final_name = match target {
+        Target::Local(branch) => branch,
+        Target::CreateTracking { short } => {
+            create_tracking_branch(repo, name, &short)?;
+            short
+        }
+    };
+    let refname = format!("refs/heads/{final_name}");
+    repo.set_head(&refname)
+        .map_err(|e| AppError::Git(format!("移动 HEAD 到 {final_name} 失败: {e}")))?;
+    Ok(())
+}
+
+/// 读取 refs/heads/<branch> 顶端提交的树。
+fn branch_tree<'r>(repo: &'r git2::Repository, branch: &str) -> AppResult<git2::Tree<'r>> {
+    repo.find_reference(&format!("refs/heads/{branch}"))
+        .or_else(|_| repo.find_reference(&format!("refs/remotes/{branch}")))
+        .map_err(|e| AppError::NotFound(format!("分支不存在: {branch} ({e})")))?
+        .peel_to_commit()
+        .map_err(|e| AppError::Git(format!("解析分支 {branch} 顶端提交失败: {e}")))?
+        .tree()
+        .map_err(|e| AppError::Git(format!("读取分支 {branch} 树失败: {e}")))
+}
+
+/// 从远程跟踪分支 `<remote_ref>`（如 `origin/dev`）创建本地分支
+/// `<short>` 并写入跟踪配置。
+///
+/// 跟踪配置手动写（branch.<name>.remote/merge）：libgit2 的
+/// `set_upstream` 会把 merge 写成 refs/remotes/…，git CLI 的
+/// pull 不识别；标准写法与 `git checkout --track` 一致。
+fn create_tracking_branch(
+    repo: &mut git2::Repository,
+    remote_ref: &str,
+    short: &str,
+) -> AppResult<()> {
+    let (remote_name, _) = split_remote_branch(repo, remote_ref)?;
+    let commit = repo
+        .find_branch(remote_ref, git2::BranchType::Remote)
+        .map_err(|e| AppError::NotFound(format!("分支不存在: {remote_ref} ({e})")))?
+        .get()
+        .peel_to_commit()
+        .map_err(|e| AppError::Git(format!("解析 {remote_ref} 顶端提交失败: {e}")))?;
+    repo.branch(short, &commit, false)
+        .map_err(|e| AppError::Git(format!("创建本地分支 {short} 失败: {e}")))?;
+    let mut config = repo
+        .config()
+        .map_err(|e| AppError::Git(format!("读取仓库配置失败: {e}")))?;
+    config
+        .set_str(&format!("branch.{short}.remote"), &remote_name)
+        .map_err(|e| AppError::Git(format!("配置 branch.{short}.remote 失败: {e}")))?;
+    config
+        .set_str(
+            &format!("branch.{short}.merge"),
+            &format!("refs/heads/{short}"),
+        )
+        .map_err(|e| AppError::Git(format!("配置 branch.{short}.merge 失败: {e}")))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -534,25 +792,49 @@ fn find_commit<'r>(repo: &'r git2::Repository, commit_id: &str) -> AppResult<git
 /// 解析遍历起点：分支名先查本地再查远程，最后按完整引用名兜底。
 fn resolve_start(repo: &git2::Repository, branch: &str) -> AppResult<git2::Oid> {
     for ty in [git2::BranchType::Local, git2::BranchType::Remote] {
-        if let Ok(found) = repo.find_branch(branch, ty) {
-            if let Ok(commit) = found.get().peel_to_commit() {
-                return Ok(commit.id());
-            }
+        if let Ok(found) = repo.find_branch(branch, ty)
+            && let Ok(commit) = found.get().peel_to_commit()
+        {
+            return Ok(commit.id());
         }
     }
-    let reference = repo.find_reference(branch).map_err(|_| {
-        AppError::NotFound(format!("分支或引用不存在: {branch}"))
-    })?;
+    let reference = repo
+        .find_reference(branch)
+        .map_err(|_| AppError::NotFound(format!("分支或引用不存在: {branch}")))?;
     let commit = reference
         .peel_to_commit()
         .map_err(|e| AppError::NotFound(format!("引用 {branch} 不指向提交: {e}")))?;
     Ok(commit.id())
 }
 
+/// 从远程跟踪分支短名拆出 (远程名, 本地短名)。
+///
+/// 按已配置远程做**最长前缀**匹配：远程名本身可含 `/`
+/// （`my/remote/dev` → (`my/remote`, `dev`)），且 `my/remote` 必须先于
+/// `my` 命中；没有任何远程匹配时报 [`AppError::InvalidArg`]。
+fn split_remote_branch(repo: &git2::Repository, name: &str) -> AppResult<(String, String)> {
+    let remotes = repo
+        .remotes()
+        .map_err(|e| AppError::Git(format!("枚举远程失败: {e}")))?;
+    let mut names: Vec<&str> = (0..remotes.len())
+        .filter_map(|i| remotes.get(i).ok().flatten())
+        .collect();
+    names.sort_by_key(|n| std::cmp::Reverse(n.len()));
+    for remote in names {
+        if let Some(rest) = name.strip_prefix(remote)
+            && let Some(short) = rest.strip_prefix('/')
+            && !short.is_empty()
+        {
+            return Ok((remote.to_string(), short.to_string()));
+        }
+    }
+    Err(AppError::InvalidArg(format!(
+        "无法从 {name} 推导本地分支名（对应远程未配置？）"
+    )))
+}
+
 /// 收集 commit-id → 引用标签表（本地/远程分支、标签、HEAD 当前分支）。
-fn collect_ref_labels(
-    repo: &git2::Repository,
-) -> AppResult<HashMap<git2::Oid, Vec<RefLabel>>> {
+fn collect_ref_labels(repo: &git2::Repository) -> AppResult<HashMap<git2::Oid, Vec<RefLabel>>> {
     let mut map: HashMap<git2::Oid, Vec<RefLabel>> = HashMap::new();
     let references = repo
         .references()
@@ -581,15 +863,14 @@ fn collect_ref_labels(
         }
     }
     // HEAD 当前分支标记。
-    if let Ok(head) = repo.head() {
-        if head.is_branch() {
-            if let (Ok(name), Ok(commit)) = (head.shorthand(), head.peel_to_commit()) {
-                map.entry(commit.id()).or_default().push(RefLabel {
-                    name: name.to_string(),
-                    kind: RefKind::Head,
-                });
-            }
-        }
+    if let Ok(head) = repo.head()
+        && head.is_branch()
+        && let (Ok(name), Ok(commit)) = (head.shorthand(), head.peel_to_commit())
+    {
+        map.entry(commit.id()).or_default().push(RefLabel {
+            name: name.to_string(),
+            kind: RefKind::Head,
+        });
     }
     Ok(map)
 }
@@ -617,15 +898,15 @@ fn passes_filter(commit: &git2::Commit<'_>, filter: &LogFilter) -> bool {
         }
     }
     let time = commit.time().seconds();
-    if let Some(since) = filter.since {
-        if time < since {
-            return false;
-        }
+    if let Some(since) = filter.since
+        && time < since
+    {
+        return false;
     }
-    if let Some(until) = filter.until {
-        if time > until {
-            return false;
-        }
+    if let Some(until) = filter.until
+        && time > until
+    {
+        return false;
     }
     true
 }
@@ -856,8 +1137,8 @@ fn build_file_diff(
 
     let old_text = old.map(|b| String::from_utf8_lossy(&b).into_owned());
     let new_text = new.map(|b| String::from_utf8_lossy(&b).into_owned());
-    let byte_total = old_text.as_deref().map_or(0, str::len)
-        + new_text.as_deref().map_or(0, str::len);
+    let byte_total =
+        old_text.as_deref().map_or(0, str::len) + new_text.as_deref().map_or(0, str::len);
     let line_total = old_text.as_deref().map_or(0, |s| s.lines().count())
         + new_text.as_deref().map_or(0, |s| s.lines().count());
     if byte_total > MAX_DIFF_BYTES || line_total > MAX_DIFF_LINES {
@@ -942,7 +1223,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("创建临时目录失败");
         let repo = git2::Repository::init(dir.path()).expect("初始化仓库失败");
         let mut config = repo.config().expect("读取仓库配置失败");
-        config.set_str("user.name", "Test User").expect("设置 user.name 失败");
+        config
+            .set_str("user.name", "Test User")
+            .expect("设置 user.name 失败");
         config
             .set_str("user.email", "test@example.com")
             .expect("设置 user.email 失败");
@@ -1032,12 +1315,16 @@ mod tests {
         assert_eq!(page.len(), 1);
         let branch_name = info.head_branch.expect("head_branch 应存在");
         let labels = &page[0].refs;
-        assert!(labels
-            .iter()
-            .any(|l| l.name == branch_name && matches!(l.kind, RefKind::Head)));
-        assert!(labels
-            .iter()
-            .any(|l| l.name == branch_name && matches!(l.kind, RefKind::Local)));
+        assert!(
+            labels
+                .iter()
+                .any(|l| l.name == branch_name && matches!(l.kind, RefKind::Head))
+        );
+        assert!(
+            labels
+                .iter()
+                .any(|l| l.name == branch_name && matches!(l.kind, RefKind::Local))
+        );
     }
 
     /// 构造“修改一行 + 新增一行”的两提交仓库，返回修改提交 id。
@@ -1058,7 +1345,11 @@ mod tests {
         assert_eq!(f.path, "a.txt");
         assert!(f.old_path.is_none());
         assert!(matches!(f.change_type, ChangeType::Modified));
-        assert_eq!((f.additions, f.deletions), (2, 1), "新增 changed/line3，删除 line2");
+        assert_eq!(
+            (f.additions, f.deletions),
+            (2, 1),
+            "新增 changed/line3，删除 line2"
+        );
     }
 
     /// (4) file_diff_commit：修改行呈现为左 Removed / 右 Added 的行对。
@@ -1093,10 +1384,12 @@ mod tests {
         commit_file(&repo, "a.txt", "v1\n", "initial");
 
         // 修改已跟踪文件 + 新增未跟踪文件。
-        std::fs::write(repo.workdir().expect("工作区").join("a.txt"), "v1 modified\n")
-            .expect("写入失败");
-        std::fs::write(repo.workdir().expect("工作区").join("new.txt"), "new\n")
-            .expect("写入失败");
+        std::fs::write(
+            repo.workdir().expect("工作区").join("a.txt"),
+            "v1 modified\n",
+        )
+        .expect("写入失败");
+        std::fs::write(repo.workdir().expect("工作区").join("new.txt"), "new\n").expect("写入失败");
 
         let statuses = status(&repo).expect("status 失败");
         let a = find_status(&statuses, "a.txt").expect("a.txt 应在状态中");
@@ -1152,8 +1445,7 @@ mod tests {
         commit_file(&repo, "a.txt", "v1\n", "initial");
 
         // 修改 + 暂存。
-        std::fs::write(repo.workdir().expect("工作区").join("a.txt"), "v2\n")
-            .expect("写入失败");
+        std::fs::write(repo.workdir().expect("工作区").join("a.txt"), "v2\n").expect("写入失败");
         stage_file(&mut repo, "a.txt").expect("stage 失败");
         let statuses = status(&repo).expect("status 失败");
         let a = find_status(&statuses, "a.txt").expect("a.txt 应在状态中");
@@ -1167,12 +1459,13 @@ mod tests {
         assert!(matches!(a.unstaged, Some(ChangeType::Modified)));
 
         // 新文件 stage 后 unstage：回到未跟踪。
-        std::fs::write(repo.workdir().expect("工作区").join("b.txt"), "b\n")
-            .expect("写入失败");
+        std::fs::write(repo.workdir().expect("工作区").join("b.txt"), "b\n").expect("写入失败");
         stage_file(&mut repo, "b.txt").expect("stage 失败");
         let statuses = status(&repo).expect("status 失败");
         assert!(matches!(
-            find_status(&statuses, "b.txt").expect("b.txt 应在状态中").staged,
+            find_status(&statuses, "b.txt")
+                .expect("b.txt 应在状态中")
+                .staged,
             Some(ChangeType::Added)
         ));
         unstage_file(&mut repo, "b.txt").expect("unstage 失败");
@@ -1181,7 +1474,7 @@ mod tests {
         assert!(b.staged.is_none());
         assert!(matches!(b.unstaged, Some(ChangeType::Untracked)));
 
-            stage_file(&mut repo, "a.txt").expect("stage 失败");
+        stage_file(&mut repo, "a.txt").expect("stage 失败");
         let oid = create_commit(&mut repo, "second").expect("create_commit 失败");
         assert_eq!(oid.len(), 40);
 
@@ -1212,11 +1505,12 @@ mod tests {
         index.write().expect("写回 index 失败");
         let tree_oid = index.write_tree_to(repo).expect("write_tree 失败");
         let tree = repo.find_tree(tree_oid).expect("find_tree 失败");
-        let parents: Vec<git2::Commit<'_>> = vec![repo
-            .head()
-            .expect("读取 HEAD 失败")
-            .peel_to_commit()
-            .expect("解析 HEAD 失败")];
+        let parents: Vec<git2::Commit<'_>> = vec![
+            repo.head()
+                .expect("读取 HEAD 失败")
+                .peel_to_commit()
+                .expect("解析 HEAD 失败"),
+        ];
         let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
         let oid = repo
             .commit(Some("HEAD"), &sig(), &sig(), message, &tree, &parent_refs)
@@ -1247,10 +1541,18 @@ mod tests {
         assert!(matches!(files[0].change_type, ChangeType::Renamed));
 
         let d = file_diff_commit(&repo, &c2, "b.txt").expect("file_diff_commit 失败");
-        assert!(matches!(d.change_type, ChangeType::Renamed), "应为 Renamed，实际 {:?}", d.change_type);
+        assert!(
+            matches!(d.change_type, ChangeType::Renamed),
+            "应为 Renamed，实际 {:?}",
+            d.change_type
+        );
         assert_eq!(d.old_path.as_deref(), Some("a.txt"));
         assert_eq!(d.new_path.as_deref(), Some("b.txt"));
-        assert_eq!((d.additions, d.deletions), (1, 1), "仅 line2 → changed 一对增删");
+        assert_eq!(
+            (d.additions, d.deletions),
+            (1, 1),
+            "仅 line2 → changed 一对增删"
+        );
 
         // 按旧路径查询也应定位到同一配对。
         let d_old = file_diff_commit(&repo, &c2, "a.txt").expect("file_diff_commit(旧路径) 失败");
@@ -1272,7 +1574,9 @@ mod tests {
         )
         .expect("写入失败");
         let mut index = repo.index().expect("读取 index 失败");
-        index.remove_path(Path::new("a.txt")).expect("移除旧路径失败");
+        index
+            .remove_path(Path::new("a.txt"))
+            .expect("移除旧路径失败");
         index.add_path(Path::new("b.txt")).expect("加入新路径失败");
         index.write().expect("写回 index 失败");
 
@@ -1281,10 +1585,18 @@ mod tests {
         assert!(matches!(entry.staged, Some(ChangeType::Renamed)));
 
         let d = file_diff_staged(&repo, "a.txt").expect("file_diff_staged 失败");
-        assert!(matches!(d.change_type, ChangeType::Renamed), "应为 Renamed，实际 {:?}", d.change_type);
+        assert!(
+            matches!(d.change_type, ChangeType::Renamed),
+            "应为 Renamed，实际 {:?}",
+            d.change_type
+        );
         assert_eq!(d.old_path.as_deref(), Some("a.txt"));
         assert_eq!(d.new_path.as_deref(), Some("b.txt"));
-        assert_eq!((d.additions, d.deletions), (1, 1), "HEAD a.txt vs index b.txt 仅一对增删");
+        assert_eq!(
+            (d.additions, d.deletions),
+            (1, 1),
+            "HEAD a.txt vs index b.txt 仅一对增删"
+        );
     }
 
     /// (9) 未暂存重命名：status 按旧路径上报，file_diff_workdir(旧路径)
@@ -1306,10 +1618,18 @@ mod tests {
         assert!(matches!(entry.unstaged, Some(ChangeType::Renamed)));
 
         let d = file_diff_workdir(&repo, "a.txt").expect("file_diff_workdir 失败");
-        assert!(matches!(d.change_type, ChangeType::Renamed), "应为 Renamed，实际 {:?}", d.change_type);
+        assert!(
+            matches!(d.change_type, ChangeType::Renamed),
+            "应为 Renamed，实际 {:?}",
+            d.change_type
+        );
         assert_eq!(d.old_path.as_deref(), Some("a.txt"));
         assert_eq!(d.new_path.as_deref(), Some("b.txt"));
-        assert_eq!((d.additions, d.deletions), (1, 1), "index a.txt vs 工作区 b.txt 仅一对增删");
+        assert_eq!(
+            (d.additions, d.deletions),
+            (1, 1),
+            "index a.txt vs 工作区 b.txt 仅一对增删"
+        );
     }
 
     /// (10) 工作区普通场景回归（修改 / untracked / 删除 / 干净文件）。
@@ -1344,5 +1664,397 @@ mod tests {
         let d = file_diff_workdir(&repo2, "a.txt").expect("clean diff 失败");
         assert!(matches!(d.change_type, ChangeType::Modified));
         assert_eq!((d.additions, d.deletions), (0, 0));
+    }
+
+    /// 配置名为 origin 的远程（指向占位 URL；libgit2 解析上游时校验
+    /// remote 存在），并把 workdir 文件写入远程跟踪引用
+    /// origin/<branch>（模拟 fetch 结果）。
+    fn create_remote_ref(repo: &git2::Repository, branch: &str, commit_id: &str) {
+        if repo.find_remote("origin").is_err() {
+            repo.remote("origin", "https://example.com/openpatchline-test.git")
+                .expect("配置 origin 远程失败");
+        }
+        let oid = git2::Oid::from_str(commit_id).expect("commit id 非法");
+        repo.reference(&format!("refs/remotes/origin/{branch}"), oid, true, "test")
+            .expect("创建远程跟踪引用失败");
+    }
+
+    /// 为本地分支配置上游（branch.<name>.remote / .merge）。
+    fn set_upstream_config(repo: &git2::Repository, branch: &str) {
+        let mut config = repo.config().expect("读取仓库配置失败");
+        config
+            .set_str(&format!("branch.{branch}.remote"), "origin")
+            .expect("设置 remote 失败");
+        config
+            .set_str(
+                &format!("branch.{branch}.merge"),
+                &format!("refs/heads/{branch}"),
+            )
+            .expect("设置 merge 失败");
+    }
+
+    /// (11) list_branches：本地在前、当前分支标记、上游与 ahead/behind、
+    /// 远程分支列出且跳过 origin/HEAD 符号引用。
+    #[test]
+    fn list_branches_current_upstream_and_remote() {
+        let (_dir, repo) = init_repo();
+        let c1 = commit_file(&repo, "a.txt", "v1\n", "initial");
+        let main = repo
+            .head()
+            .expect("读取 HEAD 失败")
+            .shorthand()
+            .expect("HEAD 应为分支")
+            .to_string();
+
+        // dev 分支停在 c1；主线继续前进 → main 领先 dev。
+        let tip = repo
+            .find_commit(git2::Oid::from_str(&c1).expect("oid 非法"))
+            .expect("查找提交失败");
+        repo.branch("dev", &tip, false).expect("创建 dev 失败");
+        let c2 = commit_file(&repo, "a.txt", "v2\n", "second");
+
+        // 上游 origin/main 指向 c1（落后 1、领先 0）。
+        create_remote_ref(&repo, &main, &c1);
+        set_upstream_config(&repo, &main);
+        // origin/HEAD 符号引用应被跳过。
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            &format!("refs/remotes/origin/{main}"),
+            true,
+            "test",
+        )
+        .expect("创建 origin/HEAD 失败");
+
+        let branches = list_branches(&repo).expect("list_branches 失败");
+        let names: Vec<(&str, BranchKind)> =
+            branches.iter().map(|b| (b.name.as_str(), b.kind)).collect();
+        // dev / main 本地在前（字典序），origin/main 远程在后。
+        assert_eq!(
+            names,
+            vec![
+                ("dev", BranchKind::Local),
+                (main.as_str(), BranchKind::Local),
+                (format!("origin/{main}").as_str(), BranchKind::Remote),
+            ],
+            "本地在前远程在后，origin/HEAD 符号引用跳过"
+        );
+
+        let main_info = branches
+            .iter()
+            .find(|b| b.name == main)
+            .expect("应包含当前分支");
+        assert!(main_info.is_current);
+        assert_eq!(
+            main_info.upstream.as_deref(),
+            Some(format!("origin/{main}").as_str())
+        );
+        assert_eq!((main_info.ahead, main_info.behind), (Some(1), Some(0)));
+        assert_eq!(main_info.tip_commit, c2);
+
+        let dev_info = branches
+            .iter()
+            .find(|b| b.name == "dev")
+            .expect("应包含 dev");
+        assert!(!dev_info.is_current);
+        assert_eq!(dev_info.upstream, None, "dev 未配置上游");
+        assert_eq!(dev_info.tip_commit, c1);
+    }
+
+    /// 空仓库：无分支可列。
+    #[test]
+    fn list_branches_empty_repo() {
+        let (_dir, repo) = init_repo();
+        let branches = list_branches(&repo).expect("list_branches 失败");
+        assert!(branches.is_empty(), "unborn HEAD 时分支列表应为空");
+    }
+
+    /// (12) checkout：本地分支往返切换，工作区内容与 head_branch 跟随。
+    #[test]
+    fn checkout_switches_local_branches() {
+        let (_dir, mut repo) = init_repo();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+        let main = repo
+            .head()
+            .expect("读取 HEAD 失败")
+            .shorthand()
+            .expect("HEAD 应为分支")
+            .to_string();
+        {
+            // dev 分支停在当前 tip（块作用域及时释放对 repo 的借用）。
+            let tip = repo
+                .head()
+                .expect("读取 HEAD 失败")
+                .peel_to_commit()
+                .expect("解析 HEAD 失败");
+            repo.branch("dev", &tip, false).expect("创建 dev 失败");
+        }
+
+        // 切到 dev 并提交不同内容。
+        checkout_branch(&mut repo, "dev").expect("切换到 dev 失败");
+        let c2 = commit_file(&repo, "a.txt", "v2\n", "on dev");
+        assert_eq!(
+            repo_info(&repo)
+                .expect("repo_info 失败")
+                .head_branch
+                .as_deref(),
+            Some("dev")
+        );
+
+        // 切回主线：内容回到 v1；再切 dev：内容 v2。
+        checkout_branch(&mut repo, &main).expect("切回主线失败");
+        assert_eq!(read_workdir(&repo, "a.txt"), "v1\n");
+        checkout_branch(&mut repo, "dev").expect("再切 dev 失败");
+        assert_eq!(read_workdir(&repo, "a.txt"), "v2\n");
+        let info = repo_info(&repo).expect("repo_info 失败");
+        assert_eq!(info.head_branch.as_deref(), Some("dev"));
+        assert_eq!(info.head_commit, c2);
+    }
+
+    /// 读取 workdir 文件内容（测试辅助）。
+    fn read_workdir(repo: &git2::Repository, path: &str) -> String {
+        std::fs::read_to_string(repo.workdir().expect("应有工作区").join(path))
+            .expect("读取文件失败")
+    }
+
+    /// (13) checkout 安全性：会被覆盖的未提交修改报错；不冲突的修改保留。
+    #[test]
+    fn checkout_rejects_conflicting_local_changes() {
+        let (_dir, mut repo) = init_repo();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+        let main = repo
+            .head()
+            .expect("读取 HEAD 失败")
+            .shorthand()
+            .expect("HEAD 应为分支")
+            .to_string();
+        {
+            let tip = repo
+                .head()
+                .expect("读取 HEAD 失败")
+                .peel_to_commit()
+                .expect("解析 HEAD 失败");
+            repo.branch("dev", &tip, false).expect("创建 dev 失败");
+        }
+
+        // dev 上 a.txt 改为 v2。
+        checkout_branch(&mut repo, "dev").expect("切换到 dev 失败");
+        commit_file(&repo, "a.txt", "v2\n", "on dev");
+        checkout_branch(&mut repo, &main).expect("切回主线失败");
+
+        // 未提交修改 a.txt（与 dev 冲突）→ 切换失败且留在原分支。
+        std::fs::write(repo.workdir().expect("应有工作区").join("a.txt"), "dirty\n")
+            .expect("写入失败");
+        match checkout_branch(&mut repo, "dev") {
+            Err(AppError::Git(_)) => {}
+            Err(e) => panic!("期望 Git 错误，实际 {e:?}"),
+            Ok(()) => panic!("有冲突的未提交修改时不应切换成功"),
+        }
+        assert_eq!(
+            repo_info(&repo)
+                .expect("repo_info 失败")
+                .head_branch
+                .as_deref(),
+            Some(main.as_str()),
+            "失败的切换不应移动 HEAD"
+        );
+
+        // 丢弃脏改（恢复 v1），新增不冲突的 untracked 文件后切换成功且文件保留。
+        std::fs::write(repo.workdir().expect("应有工作区").join("a.txt"), "v1\n")
+            .expect("恢复失败");
+        std::fs::write(
+            repo.workdir().expect("应有工作区").join("note.md"),
+            "note\n",
+        )
+        .expect("写入失败");
+        checkout_branch(&mut repo, "dev").expect("不冲突修改不应阻断切换");
+        assert_eq!(read_workdir(&repo, "a.txt"), "v2\n");
+        assert_eq!(
+            read_workdir(&repo, "note.md"),
+            "note\n",
+            "untracked 文件应保留"
+        );
+    }
+
+    /// (14) checkout 远程分支：创建同名本地跟踪分支（DWIM），二次点击
+    /// 远程名时切换到既有本地分支。
+    #[test]
+    fn checkout_remote_creates_tracking_branch() {
+        let (_dir, mut repo) = init_repo();
+        let c1 = commit_file(&repo, "a.txt", "v1\n", "initial");
+
+        // 模拟 fetch：origin/feat 指向 c1。
+        create_remote_ref(&repo, "feat", &c1);
+
+        checkout_branch(&mut repo, "origin/feat").expect("检出远程分支失败");
+        let info = repo_info(&repo).expect("repo_info 失败");
+        assert_eq!(
+            info.head_branch.as_deref(),
+            Some("feat"),
+            "应创建并切到本地 feat"
+        );
+        assert_eq!(info.head_commit, c1);
+
+        // 本地 feat 的上游应配置为 origin/feat。
+        let upstream_name = {
+            let local = repo
+                .find_branch("feat", git2::BranchType::Local)
+                .expect("本地 feat 应存在");
+            let upstream = local.upstream().expect("上游应已配置");
+            upstream.name().expect("上游名非法").map(str::to_string)
+        };
+        assert_eq!(upstream_name.as_deref(), Some("origin/feat"));
+
+        // 再次按远程名检出：本地已存在 → 直接切换本地 feat，不报错。
+        checkout_branch(&mut repo, "origin/feat").expect("二次检出远程分支失败");
+        assert_eq!(
+            repo_info(&repo)
+                .expect("repo_info 失败")
+                .head_branch
+                .as_deref(),
+            Some("feat")
+        );
+    }
+
+    /// (15) checkout 参数校验：空名 / 非法名 / 不存在的分支。
+    #[test]
+    fn checkout_invalid_and_unknown_branch() {
+        let (_dir, mut repo) = init_repo();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+
+        match checkout_branch(&mut repo, "  ") {
+            Err(AppError::InvalidArg(_)) => {}
+            other => panic!("空分支名应报 InvalidArg，实际 {other:?}"),
+        }
+        match checkout_branch(&mut repo, "bad..name") {
+            Err(AppError::InvalidArg(_)) => {}
+            other => panic!("非法分支名应报 InvalidArg，实际 {other:?}"),
+        }
+        match checkout_branch(&mut repo, "no-such-branch") {
+            Err(AppError::NotFound(_)) => {}
+            other => panic!("不存在分支应报 NotFound，实际 {other:?}"),
+        }
+    }
+
+    /// (16) 含 `/` 的远程名：按最长前缀匹配拆分（my/remote/dev →
+    /// 远程 `my/remote` + 本地 `dev`），且优先于短名远程 `my` 命中。
+    #[test]
+    fn checkout_slash_remote_longest_prefix_match() {
+        let (_dir, mut repo) = init_repo();
+        let c1 = commit_file(&repo, "a.txt", "v1\n", "initial");
+
+        // 同时配置 my 与 my/remote 两个远程，制造前缀歧义。
+        repo.remote("my", "https://example.com/my.git")
+            .expect("配置 my 失败");
+        repo.remote("my/remote", "https://example.com/my-remote.git")
+            .expect("配置 my/remote 失败");
+        let oid = git2::Oid::from_str(&c1).expect("oid 非法");
+        repo.reference("refs/remotes/my/remote/dev", oid, true, "test")
+            .expect("创建远程跟踪引用失败");
+
+        checkout_branch(&mut repo, "my/remote/dev").expect("检出含斜杠远程分支失败");
+        let info = repo_info(&repo).expect("repo_info 失败");
+        assert_eq!(info.head_branch.as_deref(), Some("dev"), "本地短名应为 dev");
+
+        // 跟踪配置指向完整远程名 my/remote（而非歧义的 my）。
+        // libgit2 限制：live config 对象不能直接 get_str，经 snapshot 读取。
+        let config = repo
+            .config()
+            .expect("读取配置失败")
+            .snapshot()
+            .expect("创建配置快照失败");
+        assert_eq!(
+            config
+                .get_str("branch.dev.remote")
+                .expect("remote 应已配置"),
+            "my/remote"
+        );
+        assert_eq!(
+            config.get_str("branch.dev.merge").expect("merge 应已配置"),
+            "refs/heads/dev"
+        );
+    }
+
+    /// 造一个不更新任何引用的提交（父为当前 HEAD），返回提交 id。
+    fn make_orphan_commit(repo: &git2::Repository, path: &str, content: &str) -> String {
+        let file_path = repo.workdir().expect("应有工作区").join(path);
+        std::fs::write(&file_path, content).expect("写入文件失败");
+        let mut index = repo.index().expect("读取 index 失败");
+        index.add_path(Path::new(path)).expect("add_path 失败");
+        index.write().expect("写回 index 失败");
+        let tree_oid = index.write_tree_to(repo).expect("write_tree 失败");
+        let tree = repo.find_tree(tree_oid).expect("find_tree 失败");
+        let parent = repo
+            .head()
+            .expect("读取 HEAD 失败")
+            .peel_to_commit()
+            .expect("解析 HEAD 失败");
+        let oid = repo
+            .commit(None, &sig(), &sig(), "orphan", &tree, &[&parent])
+            .expect("创建提交失败");
+        // 恢复工作区文件到 HEAD 版本，避免影响后续测试步骤。
+        std::fs::write(&file_path, "v1\n").expect("恢复文件失败");
+        let mut index = repo.index().expect("读取 index 失败");
+        index.add_path(Path::new(path)).expect("恢复 index 失败");
+        index.write().expect("写回 index 失败");
+        oid.to_string()
+    }
+
+    /// (17) DWIM 失败不残留：检出冲突时不创建本地分支、不写跟踪配置
+    /// （与 git CLI 行为一致）；恢复后重试能正确建分支切换。
+    #[test]
+    fn checkout_dwim_failure_leaves_no_residue() {
+        let (_dir, mut repo) = init_repo();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+        let head_before = repo
+            .head()
+            .expect("读取 HEAD 失败")
+            .peel_to_commit()
+            .expect("解析 HEAD 失败")
+            .id()
+            .to_string();
+
+        // 远程 dev 分支上 a.txt 内容不同 → 与本地脏改冲突。
+        let c2 = make_orphan_commit(&repo, "a.txt", "remote-version\n");
+        create_remote_ref(&repo, "dev", &c2);
+        std::fs::write(repo.workdir().expect("应有工作区").join("a.txt"), "dirty\n")
+            .expect("写入脏改失败");
+
+        match checkout_branch(&mut repo, "origin/dev") {
+            Err(AppError::Git(_)) => {}
+            Err(e) => panic!("期望 Git 冲突错误，实际 {e:?}"),
+            Ok(()) => panic!("冲突的 DWIM 检出不应成功"),
+        }
+        assert!(
+            repo.find_branch("dev", git2::BranchType::Local).is_err(),
+            "失败的 DWIM 不应创建本地分支"
+        );
+        let config = repo.config().expect("读取配置失败");
+        assert!(
+            config.get_str("branch.dev.remote").is_err(),
+            "失败的 DWIM 不应写跟踪配置"
+        );
+        assert_eq!(
+            repo.head()
+                .expect("读取 HEAD 失败")
+                .peel_to_commit()
+                .expect("解析失败")
+                .id()
+                .to_string(),
+            head_before,
+            "HEAD 不应移动"
+        );
+
+        // 恢复脏改后重试：成功创建跟踪分支并切换（不残留旧状态干扰）。
+        std::fs::write(repo.workdir().expect("应有工作区").join("a.txt"), "v1\n")
+            .expect("恢复失败");
+        checkout_branch(&mut repo, "origin/dev").expect("恢复后 DWIM 应成功");
+        assert_eq!(
+            repo_info(&repo)
+                .expect("repo_info 失败")
+                .head_branch
+                .as_deref(),
+            Some("dev")
+        );
+        assert_eq!(read_workdir(&repo, "a.txt"), "remote-version\n");
     }
 }

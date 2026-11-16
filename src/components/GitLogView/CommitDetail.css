@@ -1,14 +1,14 @@
-/* 提交详情面板（右侧 280px，docs/06 §8.5）。 */
+/* 提交详情面板（右侧 312px，docs/06 §8.5）。 */
 .commit-detail {
-  width: 280px;
+  width: 312px;
   flex: none;
   overflow-y: auto;
   background: var(--surface-1);
-  border-left: 1px solid var(--border);
-  padding: var(--space-3);
+  border-left: 1px solid var(--border-subtle);
+  padding: 12px 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: 12px;
 }
 
 .cd-placeholder {
@@ -17,88 +17,322 @@
   font-size: var(--text-sm);
 }
 
+.cd-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cd-topbar-title {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.cd-topbar .icon-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
 .cd-hash {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 5px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  background: var(--surface-0);
+  text-align: left;
   cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.cd-hash:hover {
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+
+.cd-hash-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .cd-short {
   font-family: var(--font-code);
-  font-size: var(--text-md);
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--accent);
+}
+
+.cd-copy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.cd-copy-pill svg {
+  width: 11px;
+  height: 11px;
+}
+
+.cd-copy-pill.is-copied {
+  background: var(--accent-soft);
   color: var(--accent);
 }
 
 .cd-full {
   font-family: var(--font-code);
-  font-size: var(--text-xs);
+  font-size: 10.5px;
   color: var(--text-muted);
   word-break: break-all;
+  line-height: 1.4;
 }
 
-.cd-hash:hover .cd-full {
-  color: var(--text-secondary);
+.cd-author-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px;
 }
 
-.cd-meta {
-  display: grid;
-  grid-template-columns: 44px 1fr;
-  gap: 2px var(--space-2);
-  margin: 0;
-  font-size: var(--text-sm);
+.cd-avatar {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
-.cd-meta dt {
-  color: var(--text-muted);
-}
-
-.cd-meta dd {
-  margin: 0;
+.cd-author-info {
+  flex: 1;
   min-width: 0;
-  overflow-wrap: anywhere;
-  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.cd-email {
+.cd-author-name {
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cd-author-meta {
   color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cd-message {
-  padding: var(--space-2);
-  border-radius: 6px;
-  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border-subtle);
   background: var(--surface-0);
-  font-size: var(--text-sm);
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.cd-message-subject {
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.cd-message-body {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+/* ---- 提交操作栏 ---- */
+.cd-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.cd-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-0);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 110ms ease, background 110ms ease, color 110ms ease;
+}
+
+.cd-action-btn:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.cd-action-btn.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.cd-action-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.cd-action-btn svg {
+  width: 12px;
+  height: 12px;
+  color: var(--text-muted);
+  flex: none;
+}
+
+.cd-action-btn:hover:not(:disabled) svg,
+.cd-action-btn.is-active svg {
+  color: var(--accent);
+}
+
+.cd-inline-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cd-inline-input {
+  flex: 1;
+  min-width: 0;
+  height: 27px;
+  font-size: 11.5px;
+}
+
+.cd-inline-btn {
+  height: 27px;
+  padding: 0 10px;
+  font-size: 11.5px;
 }
 
 .cd-files {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
   min-height: 0;
 }
 
+.cd-files-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-inline: 2px;
+}
+
 .cd-files-title {
-  margin-bottom: var(--space-1);
-  font-size: var(--text-xs);
+  font-size: 11px;
+  font-weight: 650;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
+}
+
+.cd-files-totals {
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--font-code);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .cd-file {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 4px;
-  border-radius: 4px;
+  gap: 7px;
+  width: 100%;
+  min-height: 28px;
+  padding: 3px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
   cursor: pointer;
+  transition: background 100ms ease;
 }
 
 .cd-file:hover {
+  background: var(--surface-2);
+}
+
+.cd-file-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  flex: none;
+  border-radius: 4px;
+  font-family: var(--font-code);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.cd-file--modified .cd-file-badge {
+  background: color-mix(in oklch, var(--color-warning) 14%, transparent);
+}
+
+.cd-file--added .cd-file-badge {
+  background: color-mix(in oklch, var(--color-success) 14%, transparent);
+}
+
+.cd-file--deleted .cd-file-badge {
+  background: color-mix(in oklch, var(--color-danger) 14%, transparent);
+}
+
+.cd-file--renamed .cd-file-badge {
+  background: color-mix(in oklch, var(--color-renamed) 14%, transparent);
+}
+
+.cd-file--untracked .cd-file-badge {
+  background: color-mix(in oklch, var(--color-untracked) 14%, transparent);
+}
+
+.cd-file--binary .cd-file-badge {
   background: var(--surface-2);
 }
 
@@ -108,10 +342,9 @@
   display: flex;
   align-items: baseline;
   overflow: hidden;
-  font-size: var(--text-sm);
+  font-size: 12px;
 }
 
-/* 目录部分从头部截断（rtl + plaintext 让省略号落在左侧），文件名完整可见。 */
 .cd-file-dir {
   flex: 0 1 auto;
   min-width: 0;
@@ -126,19 +359,27 @@
 .cd-file-base {
   flex: none;
   color: var(--text-primary);
+  font-weight: 500;
   white-space: nowrap;
+}
+
+.cd-file-stats {
+  display: inline-flex;
+  flex: none;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .cd-add {
   flex: none;
   font-family: var(--font-code);
-  font-size: var(--text-xs);
+  font-size: 11px;
   color: var(--color-success);
 }
 
 .cd-del {
   flex: none;
   font-family: var(--font-code);
-  font-size: var(--text-xs);
+  font-size: 11px;
   color: var(--color-danger);
 }

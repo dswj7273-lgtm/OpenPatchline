@@ -3,6 +3,8 @@ name = "openpatchline"
 version = "0.1.0"
 description = "OpenPatchline - Git diff viewer"
 authors = ["OpenPatchline contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/starcommit/OpenPatchline"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

@@ -1,7 +1,7 @@
-/* 提交图 canvas：位于行内容之下，只覆盖 90px 图形列。 */
+/* 提交图 canvas：覆盖泳道列区域，绘制在行高亮背景之上（外环通过 destination-out 镂空）。 */
 .commit-graph-canvas {
   position: absolute;
   left: 0;
-  z-index: 0;
+  z-index: 2;
   pointer-events: none;
 }

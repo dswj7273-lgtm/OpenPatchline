@@ -52,9 +52,8 @@ impl RepoManager {
     /// 找不到仓库时返回 [`AppError::NotFound`]（区别于其他 Git 错误，
     /// 命令层据此触发子仓库扫描）。
     pub fn open(&self, path: &Path) -> AppResult<RepoInfo> {
-        let canonical: PathBuf = std::fs::canonicalize(path).map_err(|e| {
-            AppError::Io(format!("路径 {} 不存在或无法解析: {e}", path.display()))
-        })?;
+        let canonical: PathBuf = std::fs::canonicalize(path)
+            .map_err(|e| AppError::Io(format!("路径 {} 不存在或无法解析: {e}", path.display())))?;
 
         // 空 flags = 允许向上搜索父目录（libgit2 默认 open 带 NO_SEARCH）。
         let repo = match git2::Repository::open_ext(
@@ -67,13 +66,13 @@ impl RepoManager {
                 return Err(AppError::NotFound(format!(
                     "{} 不是 Git 仓库",
                     canonical.display()
-                )))
+                )));
             }
             Err(e) => {
                 return Err(AppError::Git(format!(
                     "打开仓库 {} 失败: {e}",
                     canonical.display()
-                )))
+                )));
             }
         };
 
@@ -82,9 +81,8 @@ impl RepoManager {
             .workdir()
             .ok_or_else(|| AppError::InvalidArg("bare 仓库没有工作区".to_string()))?
             .to_path_buf();
-        let root = std::fs::canonicalize(&root).map_err(|e| {
-            AppError::Io(format!("解析仓库根路径 {} 失败: {e}", root.display()))
-        })?;
+        let root = std::fs::canonicalize(&root)
+            .map_err(|e| AppError::Io(format!("解析仓库根路径 {} 失败: {e}", root.display())))?;
         let id = root.to_string_lossy().into_owned();
 
         // 快路径：已打开则复用既有条目（并发 open 同一仓库时以后写入者为准）。
@@ -98,8 +96,7 @@ impl RepoManager {
             graph_state: graph::GraphState::new(),
         };
         let info = git_service::repo_info(&entry.repo)?;
-        self.lock_table()
-            .insert(id, Arc::new(Mutex::new(entry)));
+        self.lock_table().insert(id, Arc::new(Mutex::new(entry)));
         Ok(info)
     }
 
@@ -143,7 +140,13 @@ mod tests {
         let manager = RepoManager::new();
 
         let info = manager.open(dir.path()).expect("打开仓库失败");
-        assert_eq!(info.id, dir.path().canonicalize().expect("canonicalize").to_string_lossy());
+        assert_eq!(
+            info.id,
+            dir.path()
+                .canonicalize()
+                .expect("canonicalize")
+                .to_string_lossy()
+        );
         assert_eq!(info.head_commit, "", "空仓库 head_commit 为空字符串");
 
         // 借出的条目可正常执行 git 操作。
@@ -188,7 +191,11 @@ mod tests {
             Err(e) => panic!("期望 NotFound，实际 {e:?}"),
             Ok(_) => panic!("非 git 目录不应打开成功"),
         }
-        assert!(manager.entry(dir.path().to_string_lossy().as_ref()).is_err());
+        assert!(
+            manager
+                .entry(dir.path().to_string_lossy().as_ref())
+                .is_err()
+        );
     }
 
     /// 选中仓库内子目录时向上搜索定位仓库根，且与直接打开根目录复用同一条目。

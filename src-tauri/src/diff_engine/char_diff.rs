@@ -84,7 +84,7 @@ pub(super) fn highlight_rows(rows: &mut [AlignedRow]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diff_engine::{diff_strings, DiffOptions};
+    use crate::diff_engine::{DiffOptions, diff_strings};
 
     fn same(ranges: &[CharRange], expect: &[(usize, usize)]) -> bool {
         ranges.len() == expect.len()
