@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { BlameView } from "./components/BlameView/BlameView";
+import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { ConflictView } from "./components/ConflictView/ConflictView";
 import * as DiffViewModule from "./components/DiffView/DiffView";
 import { GitLogView } from "./components/GitLogView/GitLogView";
@@ -633,8 +634,15 @@ export default function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       const state = useAppStore.getState();
       if (e.key === "Escape") {
-        // 浮层（设置 / 命令面板 / 仓库候选）各自持有捕获监听优先关闭。
-        if (state.repoCandidates || state.settingsOpen || state.commandPaletteOpen) return;
+        // 浮层（设置 / 命令面板 / Rebase / 仓库候选）各自持有捕获监听优先关闭。
+        if (
+          state.repoCandidates ||
+          state.settingsOpen ||
+          state.commandPaletteOpen ||
+          state.rebaseModalOpen
+        ) {
+          return;
+        }
         if (state.activeView === "diff") {
           goBackToLog();
           return;
@@ -744,6 +752,7 @@ export default function App() {
           </div>
         </main>
         <SettingsModal />
+        <CommandPalette />
         <RepoCandidateModal />
       </div>
     );
@@ -771,6 +780,7 @@ export default function App() {
         </main>
       </div>
       <SettingsModal />
+      <CommandPalette />
       <RepoCandidateModal />
     </div>
   );

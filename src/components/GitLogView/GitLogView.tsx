@@ -620,6 +620,9 @@ function GitCommandCenter({
 export function GitLogView() {
   const logFilter = useAppStore((s) => s.logFilter);
   const searchFocusTick = useAppStore((s) => s.searchFocusTick);
+  const rebaseModalOpen = useAppStore((s) => s.rebaseModalOpen);
+  const closeRebaseModal = useAppStore((s) => s.closeRebaseModal);
+  const openRebaseModal = useAppStore((s) => s.openRebaseModal);
   const setLogFilter = useAppStore((s) => s.setLogFilter);
   const selectedCommitId = useAppStore((s) => s.selectedCommitId);
   const compareRange = useAppStore((s) => s.compareRange);
@@ -639,7 +642,6 @@ export function GitLogView() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [cmdTab, setCmdTab] = useState<CommandTab>("sync");
-  const [rebaseOpen, setRebaseOpen] = useState(false);
 
   const omnibarRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -1243,7 +1245,7 @@ export function GitLogView() {
             <GitCommandCenter
               activeTab={cmdTab}
               onTabChange={setCmdTab}
-              onOpenRebase={() => setRebaseOpen(true)}
+              onOpenRebase={openRebaseModal}
               onClose={() => setCmdOpen(false)}
             />
           )}
@@ -1253,10 +1255,10 @@ export function GitLogView() {
       <div className="gitlog-body">
         <CommitTable />
         {(selectedCommitId !== null || compareRange !== null) && (
-          <CommitDetail onOpenRebase={() => setRebaseOpen(true)} />
+          <CommitDetail onOpenRebase={openRebaseModal} />
         )}
       </div>
-      {rebaseOpen && <RebaseModal onClose={() => setRebaseOpen(false)} />}
+      {rebaseModalOpen && <RebaseModal onClose={() => closeRebaseModal()} />}
     </section>
   );
 }

@@ -128,14 +128,17 @@ export interface SettingsSlice {
   syncSystemTheme: () => void;
 }
 
-/** 全局浮层 UI（设置弹窗 / 命令面板）。 */
+/** 全局浮层 UI（设置弹窗 / 命令面板 / 轻量 Rebase 弹窗）。 */
 export interface UiSlice {
   settingsOpen: boolean;
   commandPaletteOpen: boolean;
+  rebaseModalOpen: boolean;
   openSettings: () => void;
   closeSettings: () => void;
   openCommandPalette: () => void;
   closeCommandPalette: () => void;
+  openRebaseModal: () => void;
+  closeRebaseModal: () => void;
 }
 
 export interface LogSlice {

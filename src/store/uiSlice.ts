@@ -9,8 +9,11 @@ import type { AppSlice, UiSlice } from "./types";
 export const createUiSlice: AppSlice<UiSlice> = (set) => ({
   settingsOpen: false,
   commandPaletteOpen: false,
+  rebaseModalOpen: false,
   openSettings: () => set({ settingsOpen: true, commandPaletteOpen: false }),
   closeSettings: () => set({ settingsOpen: false }),
   openCommandPalette: () => set({ commandPaletteOpen: true, settingsOpen: false }),
   closeCommandPalette: () => set({ commandPaletteOpen: false }),
+  openRebaseModal: () => set({ rebaseModalOpen: true, commandPaletteOpen: false }),
+  closeRebaseModal: () => set({ rebaseModalOpen: false }),
 });
