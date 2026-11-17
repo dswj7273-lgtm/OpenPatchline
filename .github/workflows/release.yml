@@ -45,6 +45,7 @@ jobs:
       - name: Build and upload to GitHub Release
         uses: tauri-apps/tauri-action@v0
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # 签名 + 公证路线（需 Apple Developer Program）——启用时取消注释，
           # 并在仓库 Settings → Secrets and variables → Actions 配置这些 secret。
           # 未配置时 Tauri 走 ad-hoc 签名，产物仍可正常下载安装（Gatekeeper 提示见 README）。
