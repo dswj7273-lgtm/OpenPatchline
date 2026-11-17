@@ -1,5 +1,8 @@
 use super::*;
-use crate::types::{BranchKind, FileStatus, LineKind, RefKind};
+use crate::types::{
+    BranchKind, DiffLineSelection, DiffPatchAction, DiffScope, DiffScopeKind, FileStatus, LineKind,
+    PatchSide, RebaseAction, RebasePlanEntry, RefKind, SignatureStatus,
+};
 
 /// 固定测试签名，避免依赖机器上的全局 git 配置。
 fn sig() -> git2::Signature<'static> {
@@ -915,4 +918,468 @@ fn conflicted_status_and_stage_resolution() {
         !repo.index().unwrap().has_conflicts(),
         "文件删除时 stage_file 也应清除冲突条目"
     );
+}
+
+fn workdir_scope() -> DiffScope {
+    DiffScope {
+        kind: DiffScopeKind::Workdir,
+        commit_id: None,
+        base_ref: None,
+        target_ref: None,
+    }
+}
+
+fn staged_scope() -> DiffScope {
+    DiffScope {
+        kind: DiffScopeKind::Staged,
+        commit_id: None,
+        base_ref: None,
+        target_ref: None,
+    }
+}
+
+fn index_blob_text(repo: &git2::Repository, path: &str) -> Option<String> {
+    let idx = fresh_index(repo).unwrap();
+    let entry = idx.get_path(Path::new(path), 0)?;
+    let blob = repo.find_blob(entry.id).ok()?;
+    Some(String::from_utf8_lossy(blob.content()).into_owned())
+}
+
+/// 4.1 & 4.2：工作区两个 hunk 独立 stage / unstage / discard + 单行精选（部分增删保留）。
+#[test]
+fn partial_hunk_and_line_stage_unstage_discard() {
+    let (dir, mut repo) = init_repo();
+    let base: String = (1..=12).map(|i| format!("line{i}\n")).collect();
+    commit_file(&repo, "sample.txt", &base, "init");
+
+    // 分别修改第 2 行与第 10-11 行（形成两处独立 hunk）。
+    let edited = "line1\nline2_mod\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10_a\nline10_b\nline12\n";
+    std::fs::write(dir.path().join("sample.txt"), edited).unwrap();
+
+    let w_diff = file_diff_workdir(&repo, "sample.txt").unwrap();
+    let h1_idx = *w_diff.change_row_indices.first().unwrap();
+    assert_eq!(h1_idx, 1);
+
+    // 1) 仅暂存第 1 个 hunk（第 2 行）
+    apply_diff_selection(
+        &mut repo,
+        &workdir_scope(),
+        "sample.txt",
+        DiffPatchAction::Stage,
+        &[DiffLineSelection {
+            row_index: h1_idx,
+            side: PatchSide::Both,
+        }],
+    )
+    .unwrap();
+
+    let staged_text = index_blob_text(&repo, "sample.txt").unwrap();
+    assert!(staged_text.contains("line2_mod\n"));
+    assert!(staged_text.contains("line10\nline11\n"));
+    assert!(!staged_text.contains("line10_a\n"));
+
+    // 2) 在剩余 workdir diff 中，只选中第 10_b 行的 Added 侧（行级精选），不暂存 10_a 与删除的 line10/11
+    let w_diff2 = file_diff_workdir(&repo, "sample.txt").unwrap();
+    let row_10b = w_diff2
+        .rows
+        .iter()
+        .position(|r| r.right.as_ref().is_some_and(|c| c.content == "line10_b"))
+        .unwrap();
+    apply_diff_selection(
+        &mut repo,
+        &workdir_scope(),
+        "sample.txt",
+        DiffPatchAction::Stage,
+        &[DiffLineSelection {
+            row_index: row_10b,
+            side: PatchSide::New,
+        }],
+    )
+    .unwrap();
+
+    let staged_after_line = index_blob_text(&repo, "sample.txt").unwrap();
+    assert!(staged_after_line.contains("line10\nline11\nline10_b\n"));
+    assert!(!staged_after_line.contains("line10_a\n"));
+
+    // 3) 在暂存区中取消暂存第 1 处修改（line2 -> line2_mod）
+    let s_diff = file_diff_staged(&repo, "sample.txt").unwrap();
+    apply_diff_selection(
+        &mut repo,
+        &staged_scope(),
+        "sample.txt",
+        DiffPatchAction::Unstage,
+        &[DiffLineSelection {
+            row_index: 1,
+            side: PatchSide::Both,
+        }],
+    )
+    .unwrap();
+    let staged_after_unstage = index_blob_text(&repo, "sample.txt").unwrap();
+    assert!(staged_after_unstage.contains("line1\nline2\nline3\n"));
+    assert!(staged_after_unstage.contains("line10_b\n"));
+    assert_eq!(s_diff.rows[1].left.as_ref().unwrap().content, "line2");
+
+    // 4) 在 workdir 中丢弃 line2_mod 的更改，保留其他修改
+    let w_diff3 = file_diff_workdir(&repo, "sample.txt").unwrap();
+    let row_l2 = w_diff3
+        .rows
+        .iter()
+        .position(|r| r.right.as_ref().is_some_and(|c| c.content == "line2_mod"))
+        .unwrap();
+    apply_diff_selection(
+        &mut repo,
+        &workdir_scope(),
+        "sample.txt",
+        DiffPatchAction::Discard,
+        &[DiffLineSelection {
+            row_index: row_l2,
+            side: PatchSide::Both,
+        }],
+    )
+    .unwrap();
+    let disk_after_discard = std::fs::read_to_string(dir.path().join("sample.txt")).unwrap();
+    assert!(disk_after_discard.contains("line1\nline2\nline3\n"));
+    assert!(disk_after_discard.contains("line10_a\nline10_b\n"));
+}
+
+/// 4.2 边界：CRLF、无 EOF 换行符、未跟踪文件局部暂存/丢弃、重命名文件局部暂存、冲突/越界拒止。
+#[test]
+fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
+    let (dir, mut repo) = init_repo();
+
+    // 1) CRLF 保留测试（屏蔽本机全局 core.autocrlf 对 commit_file 写入基准的转换）
+    repo.config()
+        .unwrap()
+        .set_bool("core.autocrlf", false)
+        .unwrap();
+    commit_file(&repo, "crlf.txt", "a\r\nb\r\nc\r\n", "crlf init");
+    std::fs::write(dir.path().join("crlf.txt"), "a\r\nb2\r\nc\r\n").unwrap();
+    let diff_crlf = file_diff_workdir(&repo, "crlf.txt").unwrap();
+    apply_diff_selection(
+        &mut repo,
+        &workdir_scope(),
+        "crlf.txt",
+        DiffPatchAction::Stage,
+        &[DiffLineSelection {
+            row_index: diff_crlf.change_row_indices[0],
+            side: PatchSide::Both,
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        index_blob_text(&repo, "crlf.txt").as_deref(),
+        Some("a\r\nb2\r\nc\r\n")
+    );
+
+    // 2) 无 EOF 换行符（去掉再恢复）
+    commit_file(&repo, "noeol.txt", "hello\nworld", "noeol init");
+    std::fs::write(dir.path().join("noeol.txt"), "hello\nworld\n").unwrap();
+    let diff_nl = file_diff_workdir(&repo, "noeol.txt").unwrap();
+    apply_diff_selection(
+        &mut repo,
+        &workdir_scope(),
+        "noeol.txt",
+        DiffPatchAction::Stage,
+        &[DiffLineSelection {
+            row_index: diff_nl.change_row_indices[0],
+            side: PatchSide::Both,
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        index_blob_text(&repo, "noeol.txt").as_deref(),
+        Some("hello\nworld\n")
+    );
+    let s_nl = file_diff_staged(&repo, "noeol.txt").unwrap();
+    apply_diff_selection(
+        &mut repo,
+        &staged_scope(),
+        "noeol.txt",
+        DiffPatchAction::Unstage,
+        &[DiffLineSelection {
+            row_index: s_nl.change_row_indices[0],
+            side: PatchSide::Both,
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        index_blob_text(&repo, "noeol.txt").as_deref(),
+        Some("hello\nworld")
+    );
+
+    // 3) 未跟踪文件行级暂存 + 行级丢弃 + 整文件丢弃
+    std::fs::write(dir.path().join("new_file.txt"), "first\nsecond\n").unwrap();
+    apply_diff_selection(
+        &mut repo,
+        &workdir_scope(),
+        "new_file.txt",
+        DiffPatchAction::Stage,
+        &[DiffLineSelection {
+            row_index: 1,
+            side: PatchSide::New,
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        index_blob_text(&repo, "new_file.txt").as_deref(),
+        Some("second\n")
+    );
+
+    let st = status(&repo).unwrap();
+    let nf = find_status(&st, "new_file.txt").unwrap();
+    assert_eq!(nf.staged, Some(ChangeType::Added));
+    assert_eq!(nf.unstaged, Some(ChangeType::Modified));
+
+    // 只丢弃未跟踪新增文件的 first 行
+    let nf_diff = file_diff_workdir(&repo, "new_file.txt").unwrap();
+    let row_first = nf_diff
+        .rows
+        .iter()
+        .position(|r| r.right.as_ref().is_some_and(|c| c.content == "first"))
+        .unwrap();
+    apply_diff_selection(
+        &mut repo,
+        &workdir_scope(),
+        "new_file.txt",
+        DiffPatchAction::Discard,
+        &[DiffLineSelection {
+            row_index: row_first,
+            side: PatchSide::New,
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("new_file.txt")).unwrap(),
+        "second\n"
+    );
+
+    // 4) 工作区重命名后局部暂存其中一处改动
+    let orig: String = (1..=10).map(|i| format!("r_line_{i}\n")).collect();
+    commit_file(&repo, "old_name.txt", &orig, "before rename");
+    std::fs::remove_file(dir.path().join("old_name.txt")).unwrap();
+    let renamed_content = orig
+        .replace("r_line_2\n", "r_line_2_edit\n")
+        .replace("r_line_9\n", "r_line_9_edit\n");
+    std::fs::write(dir.path().join("new_name.txt"), &renamed_content).unwrap();
+
+    let ren_diff = file_diff_workdir(&repo, "new_name.txt").unwrap();
+    assert_eq!(ren_diff.change_type, ChangeType::Renamed);
+    let r2_row = ren_diff.change_row_indices[0];
+    apply_diff_selection(
+        &mut repo,
+        &workdir_scope(),
+        "new_name.txt",
+        DiffPatchAction::Stage,
+        &[DiffLineSelection {
+            row_index: r2_row,
+            side: PatchSide::Both,
+        }],
+    )
+    .unwrap();
+    assert!(index_blob_text(&repo, "old_name.txt").is_none());
+    let staged_ren = index_blob_text(&repo, "new_name.txt").unwrap();
+    assert!(staged_ren.contains("r_line_2_edit\n"));
+    assert!(staged_ren.contains("r_line_9\n"));
+    assert!(!staged_ren.contains("r_line_9_edit\n"));
+
+    // 5) 只读 Commit scope 或越界行下标均被拒绝
+    assert!(
+        apply_diff_selection(
+            &mut repo,
+            &DiffScope {
+                kind: DiffScopeKind::Commit,
+                commit_id: Some("HEAD".into()),
+                base_ref: None,
+                target_ref: None,
+            },
+            "new_name.txt",
+            DiffPatchAction::Stage,
+            &[DiffLineSelection {
+                row_index: 0,
+                side: PatchSide::Both,
+            }],
+        )
+        .is_err()
+    );
+    assert!(
+        apply_diff_selection(
+            &mut repo,
+            &workdir_scope(),
+            "new_name.txt",
+            DiffPatchAction::Stage,
+            &[DiffLineSelection {
+                row_index: 9999,
+                side: PatchSide::Both,
+            }],
+        )
+        .is_err()
+    );
+}
+
+/// 4.3：范围对比 changed_files_range / file_diff_range 支持提交哈希与分支名及重命名识别。
+#[test]
+fn range_diff_commits_and_branches() {
+    let (_dir, repo) = init_repo();
+    let c1 = commit_file(&repo, "a.txt", "one\n", "c1");
+    let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+    repo.branch("feature", &head_commit, false).unwrap();
+    drop(head_commit);
+
+    let c2 = commit_file(&repo, "a.txt", "one\ntwo\n", "c2");
+    commit_file(&repo, "b.txt", "hello\n", "c3");
+
+    let range_files = changed_files_range(&repo, &c1, "HEAD").unwrap();
+    assert_eq!(range_files.len(), 2);
+    assert!(
+        range_files
+            .iter()
+            .any(|f| f.path == "a.txt" && f.additions == 1)
+    );
+    assert!(
+        range_files
+            .iter()
+            .any(|f| f.path == "b.txt" && f.change_type == ChangeType::Added)
+    );
+
+    let diff_b = file_diff_range(&repo, "feature", "HEAD", "b.txt").unwrap();
+    assert_eq!(diff_b.change_type, ChangeType::Added);
+    assert_eq!(diff_b.additions, 1);
+
+    let diff_a = file_diff_range(&repo, &c1, &c2, "a.txt").unwrap();
+    assert_eq!(diff_a.additions, 1);
+    assert!(changed_files_range(&repo, "", "HEAD").is_err());
+    assert!(changed_files_range(&repo, "no_such_branch", "HEAD").is_err());
+}
+
+/// 4.4：提交模板剥离注释、签名配置解析与历史提交签名校验。
+#[test]
+fn commit_metadata_template_and_signature_parsing() {
+    let (dir, repo) = init_repo();
+    let tpl_path = dir.path().join(".gitmessage");
+    std::fs::write(
+        &tpl_path,
+        "# 标题前缀提示\nfeat: \n\n# 详细说明\n\nSigned-off-by: demo\n",
+    )
+    .unwrap();
+    let mut cfg = repo.config().unwrap();
+    cfg.set_str("commit.template", ".gitmessage").unwrap();
+    cfg.set_bool("commit.gpgsign", true).unwrap();
+    cfg.set_str("gpg.format", "ssh").unwrap();
+    cfg.set_str("user.signingkey", "~/.ssh/id_ed25519.pub")
+        .unwrap();
+
+    let meta = commit_metadata(&repo).unwrap();
+    assert!(meta.gpg_sign_enabled);
+    assert_eq!(meta.gpg_format, "ssh");
+    assert_eq!(meta.signing_key.as_deref(), Some("~/.ssh/id_ed25519.pub"));
+    assert_eq!(
+        meta.commit_template.as_deref(),
+        Some("feat: \n\n\nSigned-off-by: demo")
+    );
+
+    let c1 = commit_file(&repo, "sig.txt", "data\n", "unsigned commit");
+    let sig_info = commit_signature_info(&repo, &c1).unwrap();
+    assert_eq!(sig_info.status, SignatureStatus::Unsigned);
+
+    // 校验各种 %G? 输出码解析
+    let g = commit::parse_signature_output(&c1, true, "G\tAlice <a@b>\tKEY123\n");
+    assert_eq!(g.status, SignatureStatus::Verified);
+    assert_eq!(g.signer.as_deref(), Some("Alice <a@b>"));
+    assert_eq!(g.key_id.as_deref(), Some("KEY123"));
+
+    let u = commit::parse_signature_output(&c1, true, "U\tBob\tKEY456\n");
+    assert_eq!(u.status, SignatureStatus::Untrusted);
+
+    let b = commit::parse_signature_output(&c1, true, "B\t\t\n");
+    assert_eq!(b.status, SignatureStatus::Bad);
+
+    let e = commit::parse_signature_output(&c1, true, "E\t\tKEY789\n");
+    assert_eq!(e.status, SignatureStatus::Unverifiable);
+}
+
+/// 4.5：轻量交互式 rebase（Reword / Squash / Fixup）保留原作者并原子前移分支，合并提交阻断与脏工作区拒止。
+#[test]
+fn lightweight_rebase_reword_squash_and_guards() {
+    let (dir, mut repo) = init_repo();
+    let base = commit_file(&repo, "f.txt", "v0\n", "base commit");
+    let c1 = commit_file(&repo, "f.txt", "v1\n", "first feat");
+    let c2 = commit_file(&repo, "f2.txt", "x\n", "wip fixup");
+    let c3 = commit_file(&repo, "f3.txt", "y\n", "squash details");
+
+    let list = list_rebase_commits(&repo, 10).unwrap();
+    assert_eq!(list.len(), 4);
+    assert_eq!(list[0].id, base);
+    assert_eq!(list[3].id, c3);
+
+    // 脏工作区应被拒止
+    std::fs::write(dir.path().join("f.txt"), "dirty\n").unwrap();
+    let bad_dirty = rewrite_recent_commits(
+        &mut repo,
+        &[RebasePlanEntry {
+            commit_id: c3.clone(),
+            action: RebaseAction::Reword,
+            message: Some("x".into()),
+        }],
+    );
+    assert!(bad_dirty.is_err());
+    std::fs::write(dir.path().join("f.txt"), "v1\n").unwrap();
+
+    // 最早一条设为 Squash 应被拒止
+    assert!(
+        rewrite_recent_commits(
+            &mut repo,
+            &[
+                RebasePlanEntry {
+                    commit_id: c2.clone(),
+                    action: RebaseAction::Squash,
+                    message: None,
+                },
+                RebasePlanEntry {
+                    commit_id: c3.clone(),
+                    action: RebaseAction::Pick,
+                    message: None,
+                },
+            ],
+        )
+        .is_err()
+    );
+
+    // 将 c1 改名为 "feat: rewritten"，c2 Fixup 掉消息，c3 Squash 进同一条提交
+    let old_tree_id = repo
+        .find_commit(git2::Oid::from_str(&c3).unwrap())
+        .unwrap()
+        .tree_id();
+    let new_head = rewrite_recent_commits(
+        &mut repo,
+        &[
+            RebasePlanEntry {
+                commit_id: c1.clone(),
+                action: RebaseAction::Reword,
+                message: Some("feat: rewritten".into()),
+            },
+            RebasePlanEntry {
+                commit_id: c2.clone(),
+                action: RebaseAction::Fixup,
+                message: None,
+            },
+            RebasePlanEntry {
+                commit_id: c3.clone(),
+                action: RebaseAction::Squash,
+                message: None,
+            },
+        ],
+    )
+    .unwrap();
+
+    let head_commit = repo
+        .find_commit(git2::Oid::from_str(&new_head).unwrap())
+        .unwrap();
+    assert_eq!(head_commit.tree_id(), old_tree_id);
+    assert_eq!(
+        head_commit.message().unwrap(),
+        "feat: rewritten\n\nsquash details"
+    );
+    assert_eq!(head_commit.author().name().ok(), Some("Test User"));
+    assert_eq!(head_commit.parent_id(0).unwrap().to_string(), base);
+    assert_eq!(repo.head().unwrap().target().unwrap(), head_commit.id());
 }

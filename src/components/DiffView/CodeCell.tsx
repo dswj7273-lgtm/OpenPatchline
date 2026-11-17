@@ -20,6 +20,13 @@ export interface CodeCellProps {
   side: "old" | "new";
   /** 该行（cell 所在侧）的 token，行内偏移。 */
   tokens: TokenSpan[];
+  /** 行在 AlignedRow[] 中的下标（用于行级选区与局部暂存）。 */
+  rowIndex?: number;
+  /** 是否支持行级点击勾选（工作区/暂存区变更行）。 */
+  selectable?: boolean;
+  /** 当前行是否被勾选。 */
+  selected?: boolean;
+  onToggleSelect?: (rowIndex: number, side: "old" | "new", shiftKey: boolean) => void;
 }
 
 export interface CodeContentProps {
@@ -102,7 +109,15 @@ export function CodeContent({ content, tokens, charRanges, side }: CodeContentPr
   );
 }
 
-function CodeCellImpl({ cell, side, tokens }: CodeCellProps) {
+function CodeCellImpl({
+  cell,
+  side,
+  tokens,
+  rowIndex,
+  selectable = false,
+  selected = false,
+  onToggleSelect,
+}: CodeCellProps) {
   if (!cell) {
     // spacer 占位格：无行号、无内容，带斜纹背景。
     return (
@@ -112,10 +127,34 @@ function CodeCellImpl({ cell, side, tokens }: CodeCellProps) {
       </div>
     );
   }
+  const canSelect = selectable && cell.kind !== "context" && rowIndex !== undefined;
   const kindClass = cell.kind === "context" ? "" : ` diff-cell--${cell.kind}`;
+  const selectedClass = selected ? " diff-cell--selected" : "";
+  const selectableClass = canSelect ? " diff-cell--selectable" : "";
   return (
-    <div className={`diff-cell diff-cell--${side}${kindClass}`}>
-      <span className="diff-cell__gutter">{cell.lineno ?? ""}</span>
+    <div
+      className={`diff-cell diff-cell--${side}${kindClass}${selectableClass}${selectedClass}`}
+      data-diff-row={canSelect ? rowIndex : undefined}
+      data-diff-side={canSelect ? side : undefined}
+    >
+      {canSelect ? (
+        <button
+          type="button"
+          className={`diff-cell__gutter diff-cell__gutter-btn${selected ? " is-selected" : ""}`}
+          aria-pressed={selected}
+          aria-label={`${selected ? "取消选择" : "选择"}第 ${cell.lineno ?? rowIndex + 1} 行用于局部操作`}
+          title="点击选择此行（Shift+点击连选范围）"
+          onMouseDown={(e) => {
+            if (e.shiftKey) e.preventDefault();
+          }}
+          onClick={(e) => onToggleSelect?.(rowIndex, side, e.shiftKey)}
+        >
+          <span className="diff-cell__gutter-mark" aria-hidden="true" />
+          <span>{cell.lineno ?? ""}</span>
+        </button>
+      ) : (
+        <span className="diff-cell__gutter">{cell.lineno ?? ""}</span>
+      )}
       <code className="diff-cell__content">
         <span className="diff-cell__track">
           <CodeContent

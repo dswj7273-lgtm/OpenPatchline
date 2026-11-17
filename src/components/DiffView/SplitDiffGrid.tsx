@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import type { TokenSpan } from "../../highlighter/tokenizer";
-import type { AlignedRow } from "../../types";
+import type { AlignedRow, DiffLineSelection, DiffPatchAction } from "../../types";
 import ChangeRail, {
   groupChangeBlocks,
   KIND_LABEL,
@@ -24,9 +24,12 @@ import ChangeRail, {
 } from "./ChangeRail";
 import CodeCell, { CodeContent } from "./CodeCell";
 import {
+  buildSplitHunkSelections,
+  buildUnifiedHunkSelections,
   buildUnifiedLines,
   computeVisibleWindow,
   findNextChangeIndex,
+  lineSelectionKey,
   maxColsOf,
 } from "./diffGridUtils";
 
@@ -68,12 +71,103 @@ export interface SplitDiffGridProps {
   changeRowIndices: number[];
   /** 左右两栏是否同步横向滚动。 */
   hLinked: boolean;
+  /** 可局部操作的范围（workdir / staged）；只读范围传 null。 */
+  patchScope?: "workdir" | "staged" | null;
+  patchBusy?: boolean;
+  selectedKeys?: ReadonlySet<string>;
+  onToggleSelectLine?: (rowIndex: number, side: "old" | "new", shiftKey: boolean) => void;
+  onDragSelectLines?: (keys: Set<string>) => void;
+  onApplyHunk?: (action: DiffPatchAction, selections: DiffLineSelection[]) => void;
 }
 
 export interface UnifiedGridProps {
   rows: AlignedRow[];
   leftTokens: TokenSpan[][];
   rightTokens: TokenSpan[][];
+  patchScope?: "workdir" | "staged" | null;
+  patchBusy?: boolean;
+  selectedKeys?: ReadonlySet<string>;
+  onToggleSelectLine?: (rowIndex: number, side: "old" | "new", shiftKey: boolean) => void;
+  onDragSelectLines?: (keys: Set<string>) => void;
+  onApplyHunk?: (action: DiffPatchAction, selections: DiffLineSelection[]) => void;
+}
+
+/** 从浏览器鼠标拖拽选区提取命中的可应用变更行键集合。 */
+function collectIntersectedLineKeys(container: HTMLElement | null): Set<string> {
+  const keys = new Set<string>();
+  if (!container) return keys;
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return keys;
+  const range = sel.getRangeAt(0);
+  if (!container.contains(range.commonAncestorContainer)) return keys;
+  const candidates = container.querySelectorAll<HTMLElement>("[data-diff-row][data-diff-side]");
+  for (const el of candidates) {
+    if (range.intersectsNode(el)) {
+      const r = el.dataset.diffRow;
+      const s = el.dataset.diffSide;
+      if (r !== undefined && (s === "old" || s === "new")) {
+        keys.add(`${r}:${s}`);
+      }
+    }
+  }
+  return keys;
+}
+
+/** Hunk 块首行右侧悬浮操作胶囊（暂存块 / 丢弃块 / 取消暂存块）。 */
+function HunkActionBar({
+  patchScope,
+  patchBusy,
+  onStage,
+  onUnstage,
+  onDiscard,
+}: {
+  patchScope: "workdir" | "staged";
+  patchBusy: boolean;
+  onStage: () => void;
+  onUnstage: () => void;
+  onDiscard: () => void;
+}) {
+  return (
+    <div
+      className="diff-hunk-actions"
+      role="group"
+      aria-label="变更块操作"
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      {patchScope === "workdir" ? (
+        <>
+          <button
+            type="button"
+            className="diff-hunk-btn diff-hunk-btn--stage"
+            disabled={patchBusy}
+            title="暂存此变更块到暂存区"
+            onClick={onStage}
+          >
+            + 暂存块
+          </button>
+          <button
+            type="button"
+            className="diff-hunk-btn diff-hunk-btn--discard"
+            disabled={patchBusy}
+            title="丢弃此变更块的工作区修改"
+            onClick={onDiscard}
+          >
+            丢弃块
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="diff-hunk-btn diff-hunk-btn--unstage"
+          disabled={patchBusy}
+          title="从暂存区撤回此变更块"
+          onClick={onUnstage}
+        >
+          − 取消暂存块
+        </button>
+      )}
+    </div>
+  );
 }
 
 /** 兜底空 token，避免每次渲染新建数组。 */
@@ -443,6 +537,12 @@ export default function SplitDiffGrid({
   rightTokens,
   changeRowIndices,
   hLinked,
+  patchScope = null,
+  patchBusy = false,
+  selectedKeys,
+  onToggleSelectLine,
+  onDragSelectLines,
+  onApplyHunk,
 }: SplitDiffGridProps) {
   const { ref, handleScroll, start, end, vp } = useDiffViewport(
     rows.length,
@@ -493,13 +593,52 @@ export default function SplitDiffGrid({
     [rows],
   );
 
+  const blockByStart = useMemo(() => {
+    const map = new Map<number, ChangeBlock>();
+    for (const b of blocks) map.set(b.start, b);
+    return map;
+  }, [blocks]);
+
+  const selectable = patchScope !== null;
   const items: ReactNode[] = [];
   for (let i = start; i < end; i++) {
     const row = rows[i];
+    const block = selectable ? blockByStart.get(i) : undefined;
     items.push(
       <div className="diff-row" role="row" aria-rowindex={i + 1} key={i} style={{ top: i * ROW_H }}>
-        <CodeCell cell={row.left} side="old" tokens={leftTokens[i] ?? EMPTY_TOKENS} />
-        <CodeCell cell={row.right} side="new" tokens={rightTokens[i] ?? EMPTY_TOKENS} />
+        <CodeCell
+          cell={row.left}
+          side="old"
+          tokens={leftTokens[i] ?? EMPTY_TOKENS}
+          rowIndex={i}
+          selectable={selectable}
+          selected={selectedKeys?.has(lineSelectionKey(i, "old")) ?? false}
+          onToggleSelect={onToggleSelectLine}
+        />
+        <CodeCell
+          cell={row.right}
+          side="new"
+          tokens={rightTokens[i] ?? EMPTY_TOKENS}
+          rowIndex={i}
+          selectable={selectable}
+          selected={selectedKeys?.has(lineSelectionKey(i, "new")) ?? false}
+          onToggleSelect={onToggleSelectLine}
+        />
+        {block && patchScope && onApplyHunk && (
+          <HunkActionBar
+            patchScope={patchScope}
+            patchBusy={patchBusy}
+            onStage={() =>
+              onApplyHunk("stage", buildSplitHunkSelections(rows, block.start, block.count))
+            }
+            onUnstage={() =>
+              onApplyHunk("unstage", buildSplitHunkSelections(rows, block.start, block.count))
+            }
+            onDiscard={() =>
+              onApplyHunk("discard", buildSplitHunkSelections(rows, block.start, block.count))
+            }
+          />
+        )}
       </div>,
     );
   }
@@ -513,6 +652,11 @@ export default function SplitDiffGrid({
           className="diff-grid"
           ref={ref}
           onScroll={handleScroll}
+          onMouseUp={() => {
+            if (selectable && onDragSelectLines) {
+              onDragSelectLines(collectIntersectedLineKeys(ref.current));
+            }
+          }}
           role="grid"
           aria-rowcount={rows.length}
         >
@@ -557,7 +701,17 @@ export default function SplitDiffGrid({
 }
 
 /** 统一视图：上下文一行；修改对拆成先删后增两行；spacer 行跳过。 */
-export function UnifiedGrid({ rows, leftTokens, rightTokens }: UnifiedGridProps) {
+export function UnifiedGrid({
+  rows,
+  leftTokens,
+  rightTokens,
+  patchScope = null,
+  patchBusy = false,
+  selectedKeys,
+  onToggleSelectLine,
+  onDragSelectLines,
+  onApplyHunk,
+}: UnifiedGridProps) {
   const { lines, changeLineIndices } = useMemo(() => buildUnifiedLines(rows), [rows]);
 
   const { ref, handleScroll, start, end, vp } = useDiffViewport(
@@ -599,20 +753,50 @@ export function UnifiedGrid({ rows, leftTokens, rightTokens }: UnifiedGridProps)
     [lines],
   );
 
+  const blockByStart = useMemo(() => {
+    const map = new Map<number, ChangeBlock>();
+    for (const b of blocks) map.set(b.start, b);
+    return map;
+  }, [blocks]);
+
+  const selectable = patchScope !== null;
   const items: ReactNode[] = [];
   for (let i = start; i < end; i++) {
     const line = lines[i];
     const kindClass = line.cell.kind === "context" ? "" : ` u-row--${line.cell.kind}`;
     const tokens = (line.side === "old" ? leftTokens : rightTokens)[line.rowIndex] ?? EMPTY_TOKENS;
+    const canSelect = selectable && line.cell.kind !== "context";
+    const key = lineSelectionKey(line.rowIndex, line.side);
+    const isSelected = canSelect && (selectedKeys?.has(key) ?? false);
+    const block = selectable ? blockByStart.get(i) : undefined;
     items.push(
       <div
-        className={`u-row${kindClass}`}
+        className={`u-row${kindClass}${isSelected ? " is-selected" : ""}`}
         role="row"
         aria-rowindex={i + 1}
         key={i}
         style={{ top: i * ROW_H }}
+        data-diff-row={canSelect ? line.rowIndex : undefined}
+        data-diff-side={canSelect ? line.side : undefined}
       >
-        <span className="u-gutter">{line.oldNo ?? ""}</span>
+        {canSelect ? (
+          <button
+            type="button"
+            className={`u-gutter u-gutter-btn${isSelected ? " is-selected" : ""}`}
+            aria-pressed={isSelected}
+            aria-label={`${isSelected ? "取消选择" : "选择"}变更行用于局部操作`}
+            title="点击选择此行（Shift+点击连选范围）"
+            onMouseDown={(e) => {
+              if (e.shiftKey) e.preventDefault();
+            }}
+            onClick={(e) => onToggleSelectLine?.(line.rowIndex, line.side, e.shiftKey)}
+          >
+            <span className="diff-cell__gutter-mark" aria-hidden="true" />
+            <span>{line.oldNo ?? ""}</span>
+          </button>
+        ) : (
+          <span className="u-gutter">{line.oldNo ?? ""}</span>
+        )}
         <span className="u-gutter">{line.newNo ?? ""}</span>
         <code className="diff-cell__content">
           <span className="diff-cell__track">
@@ -624,6 +808,21 @@ export function UnifiedGrid({ rows, leftTokens, rightTokens }: UnifiedGridProps)
             />
           </span>
         </code>
+        {block && patchScope && onApplyHunk && (
+          <HunkActionBar
+            patchScope={patchScope}
+            patchBusy={patchBusy}
+            onStage={() =>
+              onApplyHunk("stage", buildUnifiedHunkSelections(lines, block.start, block.count))
+            }
+            onUnstage={() =>
+              onApplyHunk("unstage", buildUnifiedHunkSelections(lines, block.start, block.count))
+            }
+            onDiscard={() =>
+              onApplyHunk("discard", buildUnifiedHunkSelections(lines, block.start, block.count))
+            }
+          />
+        )}
       </div>,
     );
   }
@@ -635,6 +834,11 @@ export function UnifiedGrid({ rows, leftTokens, rightTokens }: UnifiedGridProps)
           className="diff-grid"
           ref={ref}
           onScroll={handleScroll}
+          onMouseUp={() => {
+            if (selectable && onDragSelectLines) {
+              onDragSelectLines(collectIntersectedLineKeys(ref.current));
+            }
+          }}
           role="grid"
           aria-rowcount={lines.length}
         >

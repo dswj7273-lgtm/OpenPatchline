@@ -12,7 +12,7 @@ import {
   BranchIcon,
   CheckIcon,
   ChevronRightIcon,
-  CommitIcon,
+  CompareIcon,
   MergeIcon,
   MinusIcon,
   PlusIcon,
@@ -22,6 +22,7 @@ import {
 } from "../Icons";
 import { useAppStore } from "../../store/app";
 import type { BranchInfo, ChangedFile, ChangeType, FileStatus } from "../../types";
+import { CommitComposer } from "./CommitComposer";
 import "./Sidebar.css";
 
 const SIDEBAR_MIN_W = 220;
@@ -50,9 +51,6 @@ const CHANGE_LETTER: Record<ChangeType, string> = {
   binary: "B",
   untracked: "U",
 };
-
-/** 按平台展示提交快捷键；实际处理始终同时支持 Meta 与 Ctrl。 */
-const COMMIT_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘ ↵" : "Ctrl ↵";
 
 /** 变更类型 → 中文说明（状态徽标悬浮提示）。 */
 const CHANGE_LABEL: Record<ChangeType, string> = {
@@ -424,10 +422,38 @@ function BranchPanel({
   const createBranch = useAppStore((s) => s.createBranch);
   const mergeBranch = useAppStore((s) => s.mergeBranch);
   const deleteBranch = useAppStore((s) => s.deleteBranch);
+  const compareBranchWithCurrent = useAppStore((s) => s.compareBranchWithCurrent);
   const loadBranches = useAppStore((s) => s.loadBranches);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [newBranch, setNewBranch] = useState("");
+  const [ctxMenu, setCtxMenu] = useState<{
+    branch: BranchInfo;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCtxMenu(null);
+    };
+    document.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [ctxMenu]);
+
+  const openBranchMenu = (e: React.MouseEvent, branchInfo: BranchInfo) => {
+    if (branchInfo.isCurrent) return;
+    e.preventDefault();
+    const x = Math.min(e.clientX, window.innerWidth - 190);
+    const y = Math.min(e.clientY, window.innerHeight - 170);
+    setCtxMenu({ branch: branchInfo, x: Math.max(8, x), y: Math.max(8, y) });
+  };
 
   const currentBranch = useMemo(() => branches.find((b) => b.isCurrent) ?? null, [branches]);
 
@@ -547,14 +573,24 @@ function BranchPanel({
 
           {locals.length > 0 && <div className="sidebar-branch-group-title">本地分支</div>}
           {locals.map((b) => (
-            <div key={b.name} className={`sidebar-branch-row${b.isCurrent ? " is-current" : ""}`}>
+            <div
+              key={b.name}
+              className={`sidebar-branch-row${b.isCurrent ? " is-current" : ""}`}
+              onContextMenu={(e) => openBranchMenu(e, b)}
+            >
               <button
                 type="button"
                 role="option"
                 aria-selected={b.isCurrent}
                 className={`sidebar-branch-item${b.isCurrent ? " is-current" : ""}`}
                 disabled={gitBusy !== null || b.isCurrent}
-                title={b.upstream ? `${b.name} → ${b.upstream}` : b.name}
+                title={
+                  b.isCurrent
+                    ? b.upstream
+                      ? `${b.name} → ${b.upstream}`
+                      : b.name
+                    : `${b.name}（点击切换；右键可与当前分支对比）`
+                }
                 onClick={() => pick(b.name)}
               >
                 <span className="sidebar-branch-item-name">{b.name}</span>
@@ -567,6 +603,16 @@ function BranchPanel({
               </button>
               {!b.isCurrent && (
                 <div className="sidebar-branch-ops">
+                  <button
+                    type="button"
+                    className="icon-btn sidebar-branch-op"
+                    disabled={gitBusy !== null}
+                    aria-label={`将分支 ${b.name} 与当前分支比较`}
+                    title={`与当前分支比较 (${b.name})`}
+                    onClick={() => void compareBranchWithCurrent(b.name)}
+                  >
+                    <CompareIcon />
+                  </button>
                   <button
                     type="button"
                     className="icon-btn sidebar-branch-op"
@@ -608,21 +654,105 @@ function BranchPanel({
           )}
           {(remoteOpen || Boolean(normalizedQuery)) &&
             remotes.map((b) => (
-              <button
+              <div
                 key={b.name}
-                type="button"
-                role="option"
-                aria-selected={false}
-                className="sidebar-branch-item sidebar-branch-item--remote"
-                disabled={gitBusy !== null}
-                title={`${b.name}（切换到该分支；无同名本地分支时创建跟踪分支）`}
-                onClick={() => pick(b.name)}
+                className="sidebar-branch-row"
+                onContextMenu={(e) => openBranchMenu(e, b)}
               >
-                <span className="sidebar-branch-item-name">{b.name}</span>
-              </button>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={false}
+                  className="sidebar-branch-item sidebar-branch-item--remote"
+                  disabled={gitBusy !== null}
+                  title={`${b.name}（切换到该分支；右键可与当前分支对比）`}
+                  onClick={() => pick(b.name)}
+                >
+                  <span className="sidebar-branch-item-name">{b.name}</span>
+                </button>
+                <div className="sidebar-branch-ops">
+                  <button
+                    type="button"
+                    className="icon-btn sidebar-branch-op"
+                    disabled={gitBusy !== null}
+                    aria-label={`将远程分支 ${b.name} 与当前分支比较`}
+                    title={`与当前分支比较 (${b.name})`}
+                    onClick={() => void compareBranchWithCurrent(b.name)}
+                  >
+                    <CompareIcon />
+                  </button>
+                </div>
+              </div>
             ))}
 
           {gitBusy === "checkout" && <p className="sidebar-branch-empty">切换分支中…</p>}
+        </div>
+      )}
+
+      {ctxMenu && (
+        <div
+          className="branch-ctx-menu"
+          role="menu"
+          aria-label={`分支 ${ctxMenu.branch.name} 操作`}
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="branch-ctx-item"
+            onClick={() => {
+              const name = ctxMenu.branch.name;
+              setCtxMenu(null);
+              void compareBranchWithCurrent(name);
+            }}
+          >
+            <CompareIcon />
+            <span>与当前比较</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="branch-ctx-item"
+            onClick={() => {
+              const name = ctxMenu.branch.name;
+              setCtxMenu(null);
+              pick(name);
+            }}
+          >
+            <BranchIcon />
+            <span>切换到此分支</span>
+          </button>
+          {ctxMenu.branch.kind === "local" && (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                className="branch-ctx-item"
+                onClick={() => {
+                  const name = ctxMenu.branch.name;
+                  setCtxMenu(null);
+                  void mergeBranch(name);
+                }}
+              >
+                <MergeIcon />
+                <span>合并到当前分支</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="branch-ctx-item is-danger"
+                onClick={() => {
+                  const name = ctxMenu.branch.name;
+                  setCtxMenu(null);
+                  void deleteBranch(name, false);
+                }}
+              >
+                <TrashIcon />
+                <span>删除本地分支</span>
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -638,11 +768,8 @@ export function Sidebar() {
   const unstageFile = useAppStore((s) => s.unstageFile);
   const unstageFiles = useAppStore((s) => s.unstageFiles);
   const openFileDiff = useAppStore((s) => s.openFileDiff);
-  const createCommit = useAppStore((s) => s.createCommit);
-  const amendCommit = useAppStore((s) => s.amendCommit);
   const discardFile = useAppStore((s) => s.discardFile);
   const gitBusy = useAppStore((s) => s.gitBusy);
-  const graphRows = useAppStore((s) => s.graphRows);
   const activeView = useAppStore((s) => s.activeView);
   const diffScope = useAppStore((s) => s.diffScope);
   const diffFiles = useAppStore((s) => s.diffFiles);
@@ -656,9 +783,6 @@ export function Sidebar() {
   const [stagedOpen, setStagedOpen] = useState(true);
   const [changesOpen, setChangesOpen] = useState(true);
   const [untrackedOpen, setUntrackedOpen] = useState(false);
-  const [message, setMessage] = useState("");
-  const [amend, setAmend] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [branchPanelOpen, setBranchPanelOpen] = useState(false);
   const [expandedDirs, setExpandedDirs] = useState<ReadonlySet<string>>(new Set());
 
@@ -727,47 +851,6 @@ export function Sidebar() {
   const openEntry = (entry: FileStatus, side: "staged" | "unstaged") => {
     const scope = side === "staged" ? { kind: "staged" as const } : { kind: "workdir" as const };
     void openFileDiff(scope, [makeChangedFile(entry, side)], 0);
-  };
-
-  const hasConflicts = conflicted.length > 0;
-  const isRebasing = repo?.state === "rebasing";
-  const canSubmit =
-    !busy &&
-    gitBusy === null &&
-    !hasConflicts &&
-    !isRebasing &&
-    Boolean(message.trim()) &&
-    (amend ? Boolean(repo?.headCommit) : staged.length > 0);
-
-  const toggleAmend = (checked: boolean) => {
-    setAmend(checked);
-    if (checked && !message.trim()) {
-      const headMsg =
-        graphRows.find((r) => r.commit.id === repo?.headCommit)?.commit.message ??
-        graphRows[0]?.commit.message ??
-        "";
-      if (headMsg) setMessage(headMsg);
-    }
-  };
-
-  const submitCommit = async () => {
-    const msg = message.trim();
-    if (!msg || !canSubmit) return;
-    setBusy(true);
-    try {
-      if (amend) {
-        const ok = await amendCommit(msg);
-        if (ok) {
-          setMessage("");
-          setAmend(false);
-        }
-      } else {
-        await createCommit(msg);
-        if (useAppStore.getState().error === null) setMessage("");
-      }
-    } finally {
-      setBusy(false);
-    }
   };
 
   return (
@@ -913,57 +996,7 @@ export function Sidebar() {
           </FileGroup>
         </div>
 
-        <div className="sidebar-commit">
-          <div className="sidebar-commit-card">
-            <textarea
-              className="sidebar-commit-input"
-              placeholder="输入提交说明…"
-              aria-label="提交信息"
-              aria-keyshortcuts="Meta+Enter Control+Enter"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  void submitCommit();
-                }
-              }}
-            />
-            <label className="sidebar-commit-amend">
-              <input
-                type="checkbox"
-                checked={amend}
-                disabled={busy || hasConflicts || isRebasing || !repo?.headCommit}
-                onChange={(e) => toggleAmend(e.target.checked)}
-              />
-              <span>修正上次提交 (Amend)</span>
-            </label>
-            {(hasConflicts || isRebasing) && (
-              <p className="sidebar-commit-hint" role="status">
-                {hasConflicts
-                  ? `存在 ${conflicted.length} 个冲突文件，解决并标记后方可继续`
-                  : "变基中，请在顶部横幅点击「继续」完成变基"}
-              </p>
-            )}
-            <div className="sidebar-commit-actions">
-              <span className="sidebar-commit-meta">
-                <span className={`sidebar-commit-staged${staged.length > 0 ? " has-staged" : ""}`}>
-                  {staged.length} 已暂存
-                </span>
-                <kbd title="Cmd/Ctrl + Enter">{COMMIT_SHORTCUT}</kbd>
-              </span>
-              <button
-                type="button"
-                className="btn btn-primary sidebar-commit-btn"
-                disabled={!canSubmit}
-                onClick={() => void submitCommit()}
-              >
-                <CommitIcon />
-                {busy ? "提交中…" : amend ? "修正提交" : "提交"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <CommitComposer />
       </div>
 
       <div

@@ -16,6 +16,7 @@ import {
   MergeIcon,
   PullIcon,
   PushIcon,
+  RebaseIcon,
   RefreshIcon,
   SearchIcon,
   StashIcon,
@@ -28,6 +29,7 @@ import {
 import { useAppStore } from "../../store/app";
 import { CommitDetail } from "./CommitDetail";
 import { CommitTable } from "./CommitTable";
+import { RebaseModal } from "./RebaseModal";
 import "./GitLogView.css";
 
 /** 输入防抖（ms）。 */
@@ -47,10 +49,12 @@ interface SuggestionItem {
 function GitCommandCenter({
   activeTab,
   onTabChange,
+  onOpenRebase,
   onClose,
 }: {
   activeTab: CommandTab;
   onTabChange: (tab: CommandTab) => void;
+  onOpenRebase: () => void;
   onClose: () => void;
 }) {
   const repo = useAppStore((s) => s.repo);
@@ -448,6 +452,21 @@ function GitCommandCenter({
               type="button"
               className="gitlog-cmd-item gitlog-cmd-item--full"
               disabled={busy}
+              onClick={() => {
+                onClose();
+                onOpenRebase();
+              }}
+            >
+              <RebaseIcon />
+              <div className="gitlog-cmd-item-copy">
+                <span className="gitlog-cmd-item-title">整理最近提交（Squash / Reword）</span>
+                <span className="gitlog-cmd-item-sub">git rebase -i (lightweight)</span>
+              </div>
+            </button>
+            <button
+              type="button"
+              className="gitlog-cmd-item gitlog-cmd-item--full"
+              disabled={busy}
               onClick={() => void runAndClose(() => resetHead("HEAD~1", "soft"))}
             >
               <UndoIcon />
@@ -523,6 +542,7 @@ export function GitLogView() {
   const logFilter = useAppStore((s) => s.logFilter);
   const setLogFilter = useAppStore((s) => s.setLogFilter);
   const selectedCommitId = useAppStore((s) => s.selectedCommitId);
+  const compareRange = useAppStore((s) => s.compareRange);
   const graphLoading = useAppStore((s) => s.graphLoading);
   const graphRows = useAppStore((s) => s.graphRows);
   const branches = useAppStore((s) => s.branches);
@@ -540,6 +560,7 @@ export function GitLogView() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [cmdTab, setCmdTab] = useState<CommandTab>("sync");
+  const [rebaseOpen, setRebaseOpen] = useState(false);
 
   const omnibarRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -1001,6 +1022,7 @@ export function GitLogView() {
             <GitCommandCenter
               activeTab={cmdTab}
               onTabChange={setCmdTab}
+              onOpenRebase={() => setRebaseOpen(true)}
               onClose={() => setCmdOpen(false)}
             />
           )}
@@ -1009,8 +1031,11 @@ export function GitLogView() {
 
       <div className="gitlog-body">
         <CommitTable />
-        {selectedCommitId !== null && <CommitDetail />}
+        {(selectedCommitId !== null || compareRange !== null) && (
+          <CommitDetail onOpenRebase={() => setRebaseOpen(true)} />
+        )}
       </div>
+      {rebaseOpen && <RebaseModal onClose={() => setRebaseOpen(false)} />}
     </section>
   );
 }

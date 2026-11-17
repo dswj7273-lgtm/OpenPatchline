@@ -412,6 +412,8 @@ pub struct GitProgressEvent {
 pub enum DiffScopeKind {
     /// 某次提交 vs 其第一个父提交。
     Commit,
+    /// 两个提交或引用之间的对比（base_ref → target_ref）。
+    Range,
     /// 暂存区 vs HEAD。
     Staged,
     /// 工作区 vs 暂存区（或 HEAD）。
@@ -424,5 +426,111 @@ pub enum DiffScopeKind {
 pub struct DiffScope {
     pub kind: DiffScopeKind,
     /// 目标提交 id；仅 `kind == Commit` 时为 Some。
+    #[serde(default)]
     pub commit_id: Option<String>,
+    /// 范围对比基线引用 / 提交 id；仅 `kind == Range` 时为 Some。
+    #[serde(default)]
+    pub base_ref: Option<String>,
+    /// 范围对比目标引用 / 提交 id；仅 `kind == Range` 时为 Some。
+    #[serde(default)]
+    pub target_ref: Option<String>,
+}
+
+/// Hunk / 行级局部变更应用动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiffPatchAction {
+    /// 工作区选定变更写入暂存区（git apply --cached）。
+    Stage,
+    /// 从暂存区撤回选定变更（恢复向 HEAD）。
+    Unstage,
+    /// 丢弃工作区选定变更（恢复向暂存区/HEAD）。
+    Discard,
+}
+
+/// 选中行覆盖的 Diff 侧。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PatchSide {
+    Old,
+    New,
+    Both,
+}
+
+/// Hunk / 行级应用时的单行选择目标（对应 FileDiffResult.rows 下标）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffLineSelection {
+    pub row_index: usize,
+    pub side: PatchSide,
+}
+
+/// 提交面板所需的仓库配置元数据（模板与 GPG/SSH 签名配置）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitMetadata {
+    /// git config commit.template 解析出的模板内容（无配置或不可读时为 None）。
+    pub commit_template: Option<String>,
+    /// 仓库是否启用 commit.gpgsign。
+    pub gpg_sign_enabled: bool,
+    /// user.signingkey 配置值。
+    pub signing_key: Option<String>,
+    /// gpg.format（openpgp / ssh / x509，缺省 openpgp）。
+    pub gpg_format: String,
+}
+
+/// 历史提交的签名校验状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SignatureStatus {
+    Verified,
+    Untrusted,
+    Bad,
+    Expired,
+    Revoked,
+    Unverifiable,
+    Unsigned,
+}
+
+/// 提交的 GPG / SSH 签名详情。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitSignatureInfo {
+    pub commit_id: String,
+    pub status: SignatureStatus,
+    pub signer: Option<String>,
+    pub key_id: Option<String>,
+}
+
+/// 轻量交互式 rebase 的单条动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RebaseAction {
+    Pick,
+    Reword,
+    Squash,
+    Fixup,
+}
+
+/// 可参与轻量交互式 rebase 的最近线性提交条目（按时间从旧到新返回）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebaseCommitEntry {
+    pub id: String,
+    pub short_id: String,
+    pub subject: String,
+    pub full_message: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub timestamp: i64,
+}
+
+/// 前端提交给后端执行轻量 rebase 的指令条目（从旧到新排序）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebasePlanEntry {
+    pub commit_id: String,
+    pub action: RebaseAction,
+    #[serde(default)]
+    pub message: Option<String>,
 }

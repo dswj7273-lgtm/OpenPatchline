@@ -349,3 +349,56 @@ export function UnlinkIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/** 对比（分支 / 提交范围差异）。 */
+export function CompareIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M3 5h8.5M9 2.5 11.5 5 9 7.5" />
+      <path d="M13 11H4.5M7 8.5 4.5 11 7 13.5" />
+    </Icon>
+  );
+}
+
+/** 签名盾牌图标（GPG / SSH 验证）。 */
+export function ShieldCheckIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M8 2.25 3.25 4.25v3.5c0 3 2 5 4.75 6 2.75-1 4.75-3 4.75-6v-3.5L8 2.25Z" />
+      <path d="m5.75 8 1.5 1.5 3-3" />
+    </Icon>
+  );
+}
+
+/** 提交信息历史图标。 */
+export function HistoryIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M3.25 6.25a5 5 0 1 1 1.1 5.3" />
+      <path d="M3 3.25v3h3" />
+      <path d="M8 5.25v3l2 1.2" />
+    </Icon>
+  );
+}
+
+/** 提交模板图标。 */
+export function TemplateIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="3" y="2.25" width="10" height="11.5" rx="1.5" />
+      <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
+    </Icon>
+  );
+}
+
+/** 整理 / 变基（interactive rebase）。 */
+export function RebaseIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="4.5" cy="4" r="1.5" />
+      <circle cx="4.5" cy="12" r="1.5" />
+      <circle cx="11.5" cy="8" r="1.5" />
+      <path d="M4.5 5.5v5M6 8h4" />
+    </Icon>
+  );
+}

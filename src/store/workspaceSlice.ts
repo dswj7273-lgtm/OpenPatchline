@@ -3,6 +3,7 @@
  */
 
 import * as api from "../api/client";
+import { recordCommitHistory } from "../utils/commitHelpers";
 import {
   isCancelledError,
   lastOutputLine,
@@ -62,6 +63,8 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
     branches: [],
     branchesLoading: false,
     stashes: [],
+    commitMetadata: null,
+    commitHistory: [],
     gitBusy: null,
     remoteProgress: null,
 
@@ -76,6 +79,18 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
         set({ fileStatus: status });
       } catch (e) {
         set({ error: reportError("loadFileStatus", e) });
+      }
+    },
+
+    loadCommitMetadata: async () => {
+      const { repo } = get();
+      if (!repo) return;
+      const repoId = repo.id;
+      try {
+        const meta = await api.getCommitMetadata(repoId);
+        if (get().repo?.id === repoId) set({ commitMetadata: meta });
+      } catch {
+        /* 模板/签名读取异常时静默退回默认配置 */
       }
     },
 
@@ -141,14 +156,21 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
       }
     },
 
-    createCommit: async (message) => {
+    createCommit: async (message, sign) => {
       const { repo } = get();
       if (!repo) {
         set({ error: "当前未打开仓库" });
         return;
       }
+      const repoId = repo.id;
       try {
-        await api.createCommit(repo.id, message);
+        if (sign === undefined) {
+          await api.createCommit(repoId, message);
+        } else {
+          await api.createCommit(repoId, message, sign);
+        }
+        const history = recordCommitHistory(repoId, message);
+        if (get().repo?.id === repoId) set({ commitHistory: history });
         await get().refreshRepoInfo();
         await get().loadFileStatus();
         await get().reloadGraph();
@@ -625,7 +647,8 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
       runExclusive("amend", "amendCommit", {}, async (repoId) => {
         const res = await api.amendCommit(repoId, message);
         if (get().repo?.id !== repoId) return false;
-        set({ repo: res.repo });
+        const history = recordCommitHistory(repoId, message);
+        set({ repo: res.repo, commitHistory: history });
         await get().loadFileStatus();
         await get().reloadGraph();
         await get().loadBranches();
@@ -690,5 +713,40 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
         return false;
       });
     },
+
+    listRebaseCommits: async (limit = 20) => {
+      const { repo } = get();
+      if (!repo) {
+        set({ error: "当前未打开仓库" });
+        return [];
+      }
+      try {
+        return await api.listRebaseCommits(repo.id, limit);
+      } catch (e) {
+        set({ error: reportError("listRebaseCommits", e) });
+        return [];
+      }
+    },
+
+    rewriteRecentCommits: async (plan) =>
+      runExclusive("rebase", "rewriteRecentCommits", {}, async (repoId) => {
+        const res = await api.rewriteRecentCommits(repoId, plan);
+        if (get().repo?.id !== repoId) return false;
+        set({
+          repo: res.repo,
+          selectedCommitId: null,
+          commitFiles: [],
+          commitSignature: null,
+          compareRange: null,
+          rangeFiles: [],
+        });
+        await get().reloadGraph();
+        await get().loadBranches();
+        if (get().error === null) {
+          set({ notice: `已整理 ${plan.length} 条提交历史` });
+          return true;
+        }
+        return false;
+      }),
   };
 };

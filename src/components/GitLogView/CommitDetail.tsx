@@ -1,6 +1,7 @@
 /**
- * 提交详情面板（docs/06 §8.5）：选中提交的元信息 + 变更文件列表。
- * 点击 hash 复制完整 commit id；点击文件进入该提交的单文件 diff。
+ * 提交详情与范围对比面板（docs/06 §8.5）：
+ * - 单提交模式：元信息、GPG/SSH 签名状态、快捷操作、变更文件列表；
+ * - 范围对比模式（4.3）：基线 → 目标方向互换、差异文件列表（点击进入 Range Diff）。
  */
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -8,12 +9,15 @@ import {
   CheckIcon,
   CherryPickIcon,
   CloseIcon,
+  CompareIcon,
   CopyIcon,
+  RebaseIcon,
+  ShieldCheckIcon,
   TagIcon,
   UndoIcon,
 } from "../Icons";
 import { useAppStore } from "../../store/app";
-import type { ChangedFile, ChangeType } from "../../types";
+import type { ChangedFile, ChangeType, CommitSignatureInfo, SignatureStatus } from "../../types";
 import { formatAbsolute } from "./CommitTable";
 import "./CommitDetail.css";
 
@@ -25,6 +29,16 @@ const CHANGE_LETTER: Record<ChangeType, string> = {
   renamed: "R",
   binary: "B",
   untracked: "??",
+};
+
+const SIGNATURE_LABELS: Record<SignatureStatus, { label: string; tone: string }> = {
+  verified: { label: "GPG/SSH 签名已验证", tone: "verified" },
+  untrusted: { label: "已签名（密钥未受信任）", tone: "warn" },
+  unverifiable: { label: "包含签名（本地无法验证）", tone: "muted" },
+  bad: { label: "签名无效", tone: "danger" },
+  expired: { label: "签名密钥已过期", tone: "danger" },
+  revoked: { label: "签名密钥已吊销", tone: "danger" },
+  unsigned: { label: "未签名", tone: "muted" },
 };
 
 /** 复制文本：优先 Clipboard API，不可用时降级 execCommand。 */
@@ -70,6 +84,16 @@ function authorBadge(name: string): { initials: string; hue: number } {
   return { initials, hue };
 }
 
+function summarizeFiles(files: ChangedFile[]): { add: number; del: number } {
+  let add = 0;
+  let del = 0;
+  for (const f of files) {
+    add += f.additions;
+    del += f.deletions;
+  }
+  return { add, del };
+}
+
 function CommitFileRow({ file, onClick }: { file: ChangedFile; onClick: () => void }) {
   const { dir, base } = splitPath(file.path);
   return (
@@ -77,7 +101,10 @@ function CommitFileRow({ file, onClick }: { file: ChangedFile; onClick: () => vo
       <span className={`cd-file-badge badge-${file.changeType}`}>
         {CHANGE_LETTER[file.changeType]}
       </span>
-      <span className="cd-file-path" title={file.path}>
+      <span
+        className="cd-file-path"
+        title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+      >
         {dir && <span className="cd-file-dir">{dir}</span>}
         <span className="cd-file-base">{base}</span>
       </span>
@@ -89,12 +116,68 @@ function CommitFileRow({ file, onClick }: { file: ChangedFile; onClick: () => vo
   );
 }
 
-export function CommitDetail() {
+function DiffFileListSection({
+  title,
+  files,
+  onOpenFile,
+}: {
+  title: string;
+  files: ChangedFile[];
+  onOpenFile: (index: number) => void;
+}) {
+  const totals = useMemo(() => summarizeFiles(files), [files]);
+  return (
+    <div className="cd-files">
+      <div className="cd-files-header">
+        <span className="cd-files-title">
+          {title} ({files.length})
+        </span>
+        {(totals.add > 0 || totals.del > 0) && (
+          <span className="cd-files-totals">
+            {totals.add > 0 && <span className="cd-add">+{totals.add}</span>}
+            {totals.del > 0 && <span className="cd-del">−{totals.del}</span>}
+          </span>
+        )}
+      </div>
+      <div className="cd-files-list">
+        {files.length === 0 ? (
+          <p className="cd-placeholder">没有检测到文件差异</p>
+        ) : (
+          files.map((file, i) => (
+            <CommitFileRow key={`${file.path}:${i}`} file={file} onClick={() => onOpenFile(i)} />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SignatureBadge({ info }: { info: CommitSignatureInfo | null }) {
+  if (!info) return null;
+  const meta = SIGNATURE_LABELS[info.status];
+  const detailParts = [meta.label];
+  if (info.signer) detailParts.push(`签署人：${info.signer}`);
+  if (info.keyId) detailParts.push(`密钥：${info.keyId}`);
+  return (
+    <div className={`cd-sig cd-sig--${meta.tone}`} title={detailParts.join("\n")}>
+      <ShieldCheckIcon />
+      <span className="cd-sig-label">{meta.label}</span>
+      {info.signer && <span className="cd-sig-signer">{info.signer}</span>}
+    </div>
+  );
+}
+
+export function CommitDetail({ onOpenRebase }: { onOpenRebase?: () => void }) {
   const selectedCommitId = useAppStore((s) => s.selectedCommitId);
   const graphRows = useAppStore((s) => s.graphRows);
   const commitFiles = useAppStore((s) => s.commitFiles);
+  const commitSignature = useAppStore((s) => s.commitSignature);
+  const compareRange = useAppStore((s) => s.compareRange);
+  const rangeFiles = useAppStore((s) => s.rangeFiles);
   const openFileDiff = useAppStore((s) => s.openFileDiff);
   const selectCommit = useAppStore((s) => s.selectCommit);
+  const swapCompareRange = useAppStore((s) => s.swapCompareRange);
+  const clearCompareRange = useAppStore((s) => s.clearCompareRange);
   const gitBusy = useAppStore((s) => s.gitBusy);
   const cherryPickCommit = useAppStore((s) => s.cherryPickCommit);
   const revertCommit = useAppStore((s) => s.revertCommit);
@@ -123,15 +206,65 @@ export function CommitDetail() {
     return () => clearTimeout(t);
   }, [copied]);
 
-  const totals = useMemo(() => {
-    let add = 0;
-    let del = 0;
-    for (const f of commitFiles) {
-      add += f.additions;
-      del += f.deletions;
-    }
-    return { add, del };
-  }, [commitFiles]);
+  if (compareRange) {
+    return (
+      <aside className="commit-detail" aria-label="范围对比">
+        <div className="cd-topbar">
+          <span className="cd-topbar-title">范围对比</span>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="关闭范围对比"
+            title="关闭范围对比"
+            onClick={clearCompareRange}
+          >
+            <CloseIcon />
+          </button>
+        </div>
+
+        <div className="cd-range-card">
+          <div className="cd-range-endpoints">
+            <div className="cd-range-point" title={compareRange.baseRef}>
+              <span className="cd-range-kicker">基线 (旧)</span>
+              <span className="cd-range-label">{compareRange.baseLabel}</span>
+            </div>
+            <span className="cd-range-arrow" aria-hidden="true">
+              →
+            </span>
+            <div className="cd-range-point" title={compareRange.targetRef}>
+              <span className="cd-range-kicker">目标 (新)</span>
+              <span className="cd-range-label">{compareRange.targetLabel}</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="cd-action-btn cd-range-swap"
+            title="互换基线与目标对比方向"
+            onClick={() => void swapCompareRange()}
+          >
+            <CompareIcon />
+            <span>互换对比方向</span>
+          </button>
+        </div>
+
+        <DiffFileListSection
+          title="差异文件"
+          files={rangeFiles}
+          onOpenFile={(i) =>
+            void openFileDiff(
+              {
+                kind: "range",
+                baseRef: compareRange.baseRef,
+                targetRef: compareRange.targetRef,
+              },
+              rangeFiles,
+              i,
+            )
+          }
+        />
+      </aside>
+    );
+  }
 
   if (!row) {
     return (
@@ -212,6 +345,8 @@ export function CommitDetail() {
         </div>
       </div>
 
+      <SignatureBadge info={commitSignature} />
+
       <div className="cd-message">
         <div className="cd-message-subject">{subject}</div>
         {body && <div className="cd-message-body">{body}</div>}
@@ -268,6 +403,18 @@ export function CommitDetail() {
           <UndoIcon />
           <span>软重置</span>
         </button>
+        {onOpenRebase && (
+          <button
+            type="button"
+            className="cd-action-btn"
+            disabled={busy}
+            title="打开轻量变基面板整理最近 N 个提交（Squash / Reword）"
+            onClick={onOpenRebase}
+          >
+            <RebaseIcon />
+            <span>整理历史</span>
+          </button>
+        )}
       </div>
 
       {inlineMode && (
@@ -302,26 +449,11 @@ export function CommitDetail() {
         </div>
       )}
 
-      <div className="cd-files">
-        <div className="cd-files-header">
-          <span className="cd-files-title">变更文件 ({commitFiles.length})</span>
-          {(totals.add > 0 || totals.del > 0) && (
-            <span className="cd-files-totals">
-              {totals.add > 0 && <span className="cd-add">+{totals.add}</span>}
-              {totals.del > 0 && <span className="cd-del">−{totals.del}</span>}
-            </span>
-          )}
-        </div>
-        <div className="cd-files-list">
-          {commitFiles.map((file, i) => (
-            <CommitFileRow
-              key={`${file.path}:${i}`}
-              file={file}
-              onClick={() => void openFileDiff({ kind: "commit", commitId: c.id }, commitFiles, i)}
-            />
-          ))}
-        </div>
-      </div>
+      <DiffFileListSection
+        title="变更文件"
+        files={commitFiles}
+        onOpenFile={(i) => void openFileDiff({ kind: "commit", commitId: c.id }, commitFiles, i)}
+      />
     </aside>
   );
 }

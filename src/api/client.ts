@@ -9,6 +9,10 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   BranchInfo,
   ChangedFile,
+  CommitMetadata,
+  CommitSignatureInfo,
+  DiffLineSelection,
+  DiffPatchAction,
   DiffScope,
   FetchResult,
   FileDiffResult,
@@ -19,6 +23,8 @@ import type {
   OpenRepositoryOutcome,
   PullResult,
   PushResult,
+  RebaseCommitEntry,
+  RebasePlanEntry,
   RecentRepo,
   RepoInfo,
   ResetMode,
@@ -64,6 +70,15 @@ export function getCommitFiles(repoId: string, commitId: string): Promise<Change
   return invoke<ChangedFile[]>("get_commit_files", { repoId, commitId });
 }
 
+/** 两个提交或引用之间的变更文件列表（baseRef → targetRef）。 */
+export function getRangeFiles(
+  repoId: string,
+  baseRef: string,
+  targetRef: string,
+): Promise<ChangedFile[]> {
+  return invoke<ChangedFile[]>("get_range_files", { repoId, baseRef, targetRef });
+}
+
 /** 按 scope 计算单个文件的左右分栏 diff。 */
 export function getFileDiff(
   repoId: string,
@@ -71,6 +86,17 @@ export function getFileDiff(
   path: string,
 ): Promise<FileDiffResult> {
   return invoke<FileDiffResult>("get_file_diff", { repoId, scope, path });
+}
+
+/** 对工作区或暂存区 diff 应用 hunk / 行级局部暂存、取消暂存或丢弃。 */
+export function applyDiffSelection(
+  repoId: string,
+  scope: DiffScope,
+  path: string,
+  action: DiffPatchAction,
+  selections: DiffLineSelection[],
+): Promise<void> {
+  return invoke<void>("apply_diff_selection", { repoId, scope, path, action, selections });
 }
 
 /** 工作区文件状态（staged / unstaged）。 */
@@ -88,9 +114,36 @@ export function unstageFile(repoId: string, path: string): Promise<void> {
   return invoke<void>("unstage_file", { repoId, path });
 }
 
-/** 提交当前暂存区，返回新提交 id。 */
-export function createCommit(repoId: string, message: string): Promise<string> {
-  return invoke<string>("create_commit", { repoId, message });
+/** 提交当前暂存区，返回新提交 id（可选强制开启或关闭签名）。 */
+export function createCommit(
+  repoId: string,
+  message: string,
+  sign: boolean | null = null,
+): Promise<string> {
+  return invoke<string>("create_commit", { repoId, message, sign });
+}
+
+/** 读取提交模板与签名配置元数据。 */
+export function getCommitMetadata(repoId: string): Promise<CommitMetadata> {
+  return invoke<CommitMetadata>("get_commit_metadata", { repoId });
+}
+
+/** 校验指定提交的 GPG / SSH 签名状态。 */
+export function getCommitSignature(repoId: string, commitId: string): Promise<CommitSignatureInfo> {
+  return invoke<CommitSignatureInfo>("get_commit_signature", { repoId, commitId });
+}
+
+/** 获取最近可整理的非合并提交列表（从旧到新）。 */
+export function listRebaseCommits(repoId: string, limit = 20): Promise<RebaseCommitEntry[]> {
+  return invoke<RebaseCommitEntry[]>("list_rebase_commits", { repoId, limit });
+}
+
+/** 执行轻量交互式变基（Pick / Reword / Squash / Fixup）。 */
+export function rewriteRecentCommits(
+  repoId: string,
+  plan: RebasePlanEntry[],
+): Promise<GitActionResult> {
+  return invoke<GitActionResult>("rewrite_recent_commits", { repoId, plan });
 }
 
 /** 列出本地与远程分支（含当前标记、上游与 ahead/behind）。 */

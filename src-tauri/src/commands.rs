@@ -35,9 +35,10 @@ use crate::logger;
 use crate::recent_repos;
 use crate::repo_manager::{RepoManager, lock_entry};
 use crate::types::{
-    BranchInfo, ChangedFile, DiffScope, DiffScopeKind, FetchResult, FileDiffResult, FileStatus,
+    BranchInfo, ChangedFile, CommitMetadata, CommitSignatureInfo, DiffLineSelection,
+    DiffPatchAction, DiffScope, DiffScopeKind, FetchResult, FileDiffResult, FileStatus,
     GitActionResult, GitProgressEvent, GraphPage, LogFilter, OpenRepositoryOutcome, PullResult,
-    PushResult, RecentRepo, RepoInfo, StashEntry,
+    PushResult, RebaseCommitEntry, RebasePlanEntry, RecentRepo, RepoInfo, StashEntry,
 };
 use crate::watcher::RepoWatcher;
 
@@ -221,7 +222,29 @@ pub async fn get_commit_files(
     .map_err(join_error)?
 }
 
-/// 按 `scope`（提交 / 暂存区 / 工作区）计算单个文件的左右分栏 diff。
+/// 两个提交或引用之间的变更文件列表（`baseRef` → `targetRef`）。
+#[tauri::command]
+pub async fn get_range_files(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    base_ref: String,
+    target_ref: String,
+) -> AppResult<Vec<ChangedFile>> {
+    if base_ref.trim().is_empty() || target_ref.trim().is_empty() {
+        return Err(AppError::InvalidArg(
+            "baseRef 与 targetRef 均不能为空".to_string(),
+        ));
+    }
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<Vec<ChangedFile>> {
+        let entry = lock_entry(&entry);
+        git_service::changed_files_range(&entry.repo, &base_ref, &target_ref)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 按 `scope`（提交 / 范围对比 / 暂存区 / 工作区）计算单个文件的左右分栏 diff。
 #[tauri::command]
 pub async fn get_file_diff(
     state: State<'_, RepoManager>,
@@ -232,12 +255,26 @@ pub async fn get_file_diff(
     if path.is_empty() {
         return Err(AppError::InvalidArg("path 不能为空".to_string()));
     }
-    // commit 范围必须有 commitId（提前校验，避免后台任务白跑）。
+    // commit / range 范围必须提供对应引用（提前校验，避免后台任务白跑）。
     if matches!(scope.kind, DiffScopeKind::Commit)
         && scope.commit_id.as_deref().is_none_or(str::is_empty)
     {
         return Err(AppError::InvalidArg(
             "scope.kind 为 commit 时必须提供 commitId".to_string(),
+        ));
+    }
+    if matches!(scope.kind, DiffScopeKind::Range)
+        && (scope
+            .base_ref
+            .as_deref()
+            .is_none_or(|s| s.trim().is_empty())
+            || scope
+                .target_ref
+                .as_deref()
+                .is_none_or(|s| s.trim().is_empty()))
+    {
+        return Err(AppError::InvalidArg(
+            "scope.kind 为 range 时必须提供 baseRef 与 targetRef".to_string(),
         ));
     }
     let entry = state.inner().clone().entry(&repo_id)?;
@@ -249,9 +286,40 @@ pub async fn get_file_diff(
                 scope.commit_id.as_deref().unwrap_or_default(),
                 &path,
             ),
+            DiffScopeKind::Range => git_service::file_diff_range(
+                &entry.repo,
+                scope.base_ref.as_deref().unwrap_or_default(),
+                scope.target_ref.as_deref().unwrap_or_default(),
+                &path,
+            ),
             DiffScopeKind::Staged => git_service::file_diff_staged(&entry.repo, &path),
             DiffScopeKind::Workdir => git_service::file_diff_workdir(&entry.repo, &path),
         }
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 对工作区或暂存区 diff 应用 hunk / 行级局部暂存、取消暂存或丢弃。
+#[tauri::command]
+pub async fn apply_diff_selection(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    scope: DiffScope,
+    path: String,
+    action: DiffPatchAction,
+    selections: Vec<DiffLineSelection>,
+) -> AppResult<()> {
+    if path.is_empty() {
+        return Err(AppError::InvalidArg("path 不能为空".to_string()));
+    }
+    if selections.is_empty() {
+        return Err(AppError::InvalidArg("选区不能为空".to_string()));
+    }
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+        let mut entry = lock_entry(&entry);
+        git_service::apply_diff_selection(&mut entry.repo, &scope, &path, action, &selections)
     })
     .await
     .map_err(join_error)?
@@ -310,12 +378,13 @@ pub async fn unstage_file(
     .map_err(join_error)?
 }
 
-/// 提交当前暂存区，返回新提交 id。
+/// 提交当前暂存区，返回新提交 id（可选强制开启或跳过 GPG / SSH 签名）。
 #[tauri::command]
 pub async fn create_commit(
     state: State<'_, RepoManager>,
     repo_id: String,
     message: String,
+    sign: Option<bool>,
 ) -> AppResult<String> {
     if message.trim().is_empty() {
         return Err(AppError::InvalidArg("提交信息不能为空".to_string()));
@@ -323,7 +392,78 @@ pub async fn create_commit(
     let entry = state.inner().clone().entry(&repo_id)?;
     tauri::async_runtime::spawn_blocking(move || -> AppResult<String> {
         let mut entry = lock_entry(&entry);
-        git_service::create_commit(&mut entry.repo, &message)
+        git_service::create_commit_with_options(&mut entry.repo, &message, sign)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 读取提交模板与仓库 GPG/SSH 签名配置元数据。
+#[tauri::command]
+pub async fn get_commit_metadata(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+) -> AppResult<CommitMetadata> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<CommitMetadata> {
+        let entry = lock_entry(&entry);
+        git_service::commit_metadata(&entry.repo)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 校验指定提交的 GPG / SSH 签名状态。
+#[tauri::command]
+pub async fn get_commit_signature(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    commit_id: String,
+) -> AppResult<CommitSignatureInfo> {
+    if commit_id.trim().is_empty() {
+        return Err(AppError::InvalidArg("commitId 不能为空".to_string()));
+    }
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<CommitSignatureInfo> {
+        let entry = lock_entry(&entry);
+        git_service::commit_signature_info(&entry.repo, &commit_id)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 读取从 HEAD 起最近连续的非合并提交列表（供轻量交互式 rebase 展示）。
+#[tauri::command]
+pub async fn list_rebase_commits(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    limit: Option<usize>,
+) -> AppResult<Vec<RebaseCommitEntry>> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<Vec<RebaseCommitEntry>> {
+        let entry = lock_entry(&entry);
+        git_service::list_rebase_commits(&entry.repo, limit.unwrap_or(20))
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 执行轻量交互式 rebase（Pick / Reword / Squash / Fixup 最近 N 个提交）。
+#[tauri::command]
+pub async fn rewrite_recent_commits(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    plan: Vec<RebasePlanEntry>,
+) -> AppResult<GitActionResult> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<GitActionResult> {
+        let mut entry = lock_entry(&entry);
+        let new_head = git_service::rewrite_recent_commits(&mut entry.repo, &plan)?;
+        let repo = git_service::repo_info(&entry.repo)?;
+        Ok(GitActionResult {
+            output: new_head,
+            repo,
+        })
     })
     .await
     .map_err(join_error)?

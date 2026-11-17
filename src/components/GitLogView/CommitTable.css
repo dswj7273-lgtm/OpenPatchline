@@ -85,6 +85,24 @@
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+.commit-row.is-compare {
+  background: color-mix(in oklch, var(--color-info) 12%, transparent);
+  box-shadow: inset 2px 0 0 var(--color-info);
+}
+
+.ct-compare-badge {
+  flex: none;
+  background: color-mix(in oklch, var(--color-info) 16%, transparent);
+  color: var(--color-info);
+  border: 1px solid color-mix(in oklch, var(--color-info) 38%, transparent);
+}
+
+.ct-compare-badge.is-target {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
 .ct-graph {
   width: var(--graph-col-w, 52px);
   flex: none;

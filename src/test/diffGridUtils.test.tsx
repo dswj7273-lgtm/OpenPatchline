@@ -1,11 +1,15 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { groupChangeBlocks } from "../components/DiffView/ChangeRail";
 import SplitDiffGrid, { UnifiedGrid } from "../components/DiffView/SplitDiffGrid";
 import {
+  buildSplitHunkSelections,
+  buildUnifiedHunkSelections,
   buildUnifiedLines,
   computeVisibleWindow,
   findNextChangeIndex,
+  keysToSelections,
+  lineSelectionKey,
   maxColsOf,
   visualCols,
 } from "../components/DiffView/diffGridUtils";
@@ -77,6 +81,28 @@ describe("diffGridUtils", () => {
       { start: 8, count: 1, kind: "add" },
     ]);
   });
+
+  it("builds split/unified hunk selections and merges side keys cleanly", () => {
+    expect(buildSplitHunkSelections(sampleRows, 1, 2)).toEqual([
+      { rowIndex: 1, side: "both" },
+      { rowIndex: 2, side: "new" },
+    ]);
+    const { lines } = buildUnifiedLines(sampleRows);
+    expect(buildUnifiedHunkSelections(lines, 1, 3)).toEqual([
+      { rowIndex: 1, side: "both" },
+      { rowIndex: 2, side: "new" },
+    ]);
+
+    const keys = new Set([
+      lineSelectionKey(2, "new"),
+      lineSelectionKey(1, "old"),
+      lineSelectionKey(1, "new"),
+    ]);
+    expect(keysToSelections(keys)).toEqual([
+      { rowIndex: 1, side: "both" },
+      { rowIndex: 2, side: "new" },
+    ]);
+  });
 });
 
 describe("SplitDiffGrid & UnifiedGrid", () => {
@@ -104,5 +130,39 @@ describe("SplitDiffGrid & UnifiedGrid", () => {
     const grid = screen.getByRole("grid");
     expect(grid).toHaveAttribute("aria-rowcount", "4");
     expect(screen.getAllByRole("row")).toHaveLength(4);
+  });
+
+  it("renders hunk buttons and line selection gutter in editable workdir/staged modes", () => {
+    const onApplyHunk = vi.fn();
+    const onToggleSelectLine = vi.fn();
+    render(
+      <SplitDiffGrid
+        rows={sampleRows}
+        leftTokens={[[], [], []]}
+        rightTokens={[[], [], []]}
+        changeRowIndices={[1, 2]}
+        hLinked
+        patchScope="workdir"
+        onApplyHunk={onApplyHunk}
+        onToggleSelectLine={onToggleSelectLine}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "+ 暂存块" }));
+    expect(onApplyHunk).toHaveBeenCalledWith("stage", [
+      { rowIndex: 1, side: "both" },
+      { rowIndex: 2, side: "new" },
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "丢弃块" }));
+    expect(onApplyHunk).toHaveBeenCalledWith("discard", [
+      { rowIndex: 1, side: "both" },
+      { rowIndex: 2, side: "new" },
+    ]);
+
+    const lineButtons = screen.getAllByRole("button", { name: /用于局部操作/ });
+    expect(lineButtons.length).toBeGreaterThan(0);
+    fireEvent.click(lineButtons[0], { shiftKey: true });
+    expect(onToggleSelectLine).toHaveBeenCalledWith(1, "old", true);
   });
 });

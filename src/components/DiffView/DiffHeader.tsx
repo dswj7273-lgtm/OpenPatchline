@@ -5,7 +5,7 @@
  * 右侧：变更计数 / 上下变更导航 / 分栏-统一模式切换 / 关闭按钮。
  */
 
-import type { ChangedFile, FileDiffResult } from "../../types";
+import type { ChangedFile, DiffScope, FileDiffResult } from "../../types";
 import {
   ArrowDownIcon,
   ArrowLeftIcon,
@@ -27,6 +27,8 @@ export interface DiffHeaderProps {
   files: ChangedFile[];
   currentIndex: number;
   diff: FileDiffResult;
+  scope: DiffScope | null;
+  scopeLabel?: string | null;
   loading: boolean;
   mode: DiffMode;
   onModeChange: (mode: DiffMode) => void;
@@ -56,10 +58,26 @@ function splitPath(path: string): { dir: string; base: string } {
   return { dir: path.slice(0, idx + 1), base: path.slice(idx + 1) };
 }
 
+function scopePillText(scope: DiffScope | null, scopeLabel?: string | null): string | null {
+  if (!scope) return null;
+  switch (scope.kind) {
+    case "workdir":
+      return "工作区";
+    case "staged":
+      return "已暂存";
+    case "commit":
+      return scope.commitId.slice(0, 7);
+    case "range":
+      return scopeLabel || `${scope.baseRef.slice(0, 7)} → ${scope.targetRef.slice(0, 7)}`;
+  }
+}
+
 export default function DiffHeader({
   files,
   currentIndex,
   diff,
+  scope,
+  scopeLabel,
   loading,
   mode,
   onModeChange,
@@ -75,6 +93,7 @@ export default function DiffHeader({
   const displayPath = isRenamed ? `${oldPath} → ${newPath}` : (newPath ?? oldPath ?? "");
   const { dir, base } = splitPath(newPath ?? oldPath ?? "");
   const changeCount = diff.changeRowIndices.length;
+  const pill = scopePillText(scope, scopeLabel);
 
   return (
     <header className="diff-header">
@@ -113,6 +132,15 @@ export default function DiffHeader({
             </>
           )}
         </span>
+
+        {pill && (
+          <span
+            className={`diff-header__scope-pill${scope?.kind === "staged" ? " is-staged" : scope?.kind === "range" ? " is-range" : ""}`}
+            title={pill}
+          >
+            {pill}
+          </span>
+        )}
 
         <span
           className="diff-header__stats"

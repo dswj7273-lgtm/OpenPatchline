@@ -3,6 +3,7 @@
  */
 
 import * as api from "../api/client";
+import { loadCommitHistory } from "../utils/commitHelpers";
 import {
   persistTheme,
   readInitialTheme,
@@ -38,6 +39,9 @@ export const createRepoSlice: AppSlice<RepoSlice> = (set, get) => ({
         hasMore: false,
         selectedCommitId: null,
         commitFiles: [],
+        commitSignature: null,
+        compareRange: null,
+        rangeFiles: [],
         activeView: "log",
         diffScope: null,
         diffFiles: [],
@@ -46,6 +50,8 @@ export const createRepoSlice: AppSlice<RepoSlice> = (set, get) => ({
         diffLoading: false,
         branches: [],
         stashes: [],
+        commitMetadata: null,
+        commitHistory: loadCommitHistory(repo.id),
         gitBusy: null,
         remoteProgress: null,
       });
@@ -53,6 +59,7 @@ export const createRepoSlice: AppSlice<RepoSlice> = (set, get) => ({
       await get().loadFileStatus();
       await get().loadBranches();
       await get().loadStashes();
+      void get().loadCommitMetadata();
       void get().loadRecentRepos();
     } catch (e) {
       set({ error: reportError("openRepo", e) });

@@ -4,7 +4,7 @@
  * 与 DOM / React 解耦，供 SplitDiffGrid / UnifiedGrid 与单元测试共同复用。
  */
 
-import type { AlignedRow, RowCell } from "../../types";
+import type { AlignedRow, DiffLineSelection, PatchSide, RowCell } from "../../types";
 
 /** 统一视图的单行：旧 / 新行号 + 内容。 */
 export interface UnifiedLine {
@@ -103,4 +103,79 @@ export function buildUnifiedLines(rows: AlignedRow[]): {
     if (lines[l].cell.kind !== "context") changeLineIndices.push(l);
   }
   return { lines, changeLineIndices };
+}
+
+/** 分栏/统一视图中变更行侧键（用于选区追踪）。 */
+export function lineSelectionKey(rowIndex: number, side: "old" | "new"): string {
+  return `${rowIndex}:${side}`;
+}
+
+/** 从分栏视图的一个连续变更块（[start, start + count)）构造整块应用选区。 */
+export function buildSplitHunkSelections(
+  rows: AlignedRow[],
+  start: number,
+  count: number,
+): DiffLineSelection[] {
+  const out: DiffLineSelection[] = [];
+  const end = Math.min(rows.length, start + count);
+  for (let i = Math.max(0, start); i < end; i++) {
+    const row = rows[i];
+    const hasLeft = row.left?.kind === "removed";
+    const hasRight = row.right?.kind === "added";
+    if (hasLeft && hasRight) {
+      out.push({ rowIndex: i, side: "both" });
+    } else if (hasLeft) {
+      out.push({ rowIndex: i, side: "old" });
+    } else if (hasRight) {
+      out.push({ rowIndex: i, side: "new" });
+    }
+  }
+  return out;
+}
+
+/** 从统一视图的一个连续变更块（[start, start + count)）构造整块应用选区。 */
+export function buildUnifiedHunkSelections(
+  lines: UnifiedLine[],
+  start: number,
+  count: number,
+): DiffLineSelection[] {
+  const keys = new Set<string>();
+  const end = Math.min(lines.length, start + count);
+  for (let i = Math.max(0, start); i < end; i++) {
+    const line = lines[i];
+    if (line.cell.kind !== "context") {
+      keys.add(lineSelectionKey(line.rowIndex, line.side));
+    }
+  }
+  return keysToSelections(keys);
+}
+
+/** 把选区集合（`rowIndex:side`）归并排序为后端可用的 `DiffLineSelection[]`。 */
+export function keysToSelections(keys: ReadonlySet<string>): DiffLineSelection[] {
+  const byRow = new Map<number, { old: boolean; new: boolean }>();
+  for (const key of keys) {
+    const sep = key.lastIndexOf(":");
+    if (sep <= 0) continue;
+    const rowIndex = Number(key.slice(0, sep));
+    const side = key.slice(sep + 1);
+    if (!Number.isInteger(rowIndex) || rowIndex < 0) continue;
+    const rec = byRow.get(rowIndex) ?? { old: false, new: false };
+    if (side === "old") rec.old = true;
+    else if (side === "new") rec.new = true;
+    byRow.set(rowIndex, rec);
+  }
+  const indices = [...byRow.keys()].sort((a, b) => a - b);
+  return indices.map((rowIndex) => {
+    const rec = byRow.get(rowIndex)!;
+    const side: PatchSide = rec.old && rec.new ? "both" : rec.old ? "old" : "new";
+    return { rowIndex, side };
+  });
+}
+
+/** 计算给定行的有效可选侧键（分栏单行可选 old/new 或两侧）。 */
+export function splitRowSelectionKeys(row: AlignedRow, rowIndex: number): string[] {
+  const out: string[] = [];
+  if (row.left?.kind === "removed") out.push(lineSelectionKey(rowIndex, "old"));
+  if (row.right?.kind === "added") out.push(lineSelectionKey(rowIndex, "new"));
+  return out;
 }

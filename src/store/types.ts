@@ -9,11 +9,18 @@ import type {
   ChangedFile,
   ChildRepo,
   CommitGraphRow,
+  CommitMetadata,
+  CommitSignatureInfo,
+  CompareRange,
+  DiffLineSelection,
+  DiffPatchAction,
   DiffScope,
   FileDiffResult,
   FileStatus,
   GitProgressEvent,
   LogFilter,
+  RebaseCommitEntry,
+  RebasePlanEntry,
   RecentRepo,
   RepoInfo,
   ResetMode,
@@ -42,6 +49,8 @@ export type GitBusy =
   | "discard"
   | "amend"
   | "stash"
+  | "rebase"
+  | "patch"
   | null;
 
 /** 提交图每页条数（docs/03 §7：分页加载）。 */
@@ -117,9 +126,22 @@ export interface LogSlice {
   logFilter: LogFilter;
   selectedCommitId: string | null;
   commitFiles: ChangedFile[];
+  commitSignature: CommitSignatureInfo | null;
+  compareRange: CompareRange | null;
+  rangeFiles: ChangedFile[];
   loadMoreCommits: () => Promise<void>;
   reloadGraph: () => Promise<void>;
   selectCommit: (id: string | null) => Promise<void>;
+  toggleCommitForCompare: (id: string) => Promise<void>;
+  compareCommits: (
+    baseRef: string,
+    targetRef: string,
+    baseLabel?: string,
+    targetLabel?: string,
+  ) => Promise<void>;
+  compareBranchWithCurrent: (branchName: string) => Promise<void>;
+  swapCompareRange: () => Promise<void>;
+  clearCompareRange: () => void;
   setLogFilter: (f: LogFilter) => void;
 }
 
@@ -135,6 +157,10 @@ export interface DiffSlice {
   nextDiffFile: () => Promise<void>;
   prevDiffFile: () => Promise<void>;
   goBackToLog: () => void;
+  applyDiffSelection: (
+    action: DiffPatchAction,
+    selections: DiffLineSelection[],
+  ) => Promise<boolean>;
 }
 
 export interface WorkspaceSlice {
@@ -142,14 +168,17 @@ export interface WorkspaceSlice {
   branches: BranchInfo[];
   branchesLoading: boolean;
   stashes: StashEntry[];
+  commitMetadata: CommitMetadata | null;
+  commitHistory: string[];
   gitBusy: GitBusy;
   remoteProgress: { op: string; message: string; percent: number | null } | null;
   loadFileStatus: () => Promise<void>;
+  loadCommitMetadata: () => Promise<void>;
   stageFile: (path: string) => Promise<void>;
   stageFiles: (paths: string[]) => Promise<void>;
   unstageFile: (path: string) => Promise<void>;
   unstageFiles: (paths: string[]) => Promise<void>;
-  createCommit: (message: string) => Promise<void>;
+  createCommit: (message: string, sign?: boolean | null) => Promise<void>;
   loadBranches: () => Promise<void>;
   checkoutBranch: (name: string) => Promise<void>;
   fetchRemote: () => Promise<void>;
@@ -177,6 +206,8 @@ export interface WorkspaceSlice {
   stashPush: (message?: string | null) => Promise<boolean>;
   stashApply: (index: number, pop: boolean) => Promise<void>;
   stashDrop: (index: number) => Promise<void>;
+  listRebaseCommits: (limit?: number) => Promise<RebaseCommitEntry[]>;
+  rewriteRecentCommits: (plan: RebasePlanEntry[]) => Promise<boolean>;
 }
 
 export type AppState = RepoSlice & LogSlice & DiffSlice & WorkspaceSlice;

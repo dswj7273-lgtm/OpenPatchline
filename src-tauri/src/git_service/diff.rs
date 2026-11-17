@@ -23,12 +23,41 @@ pub fn changed_files(repo: &git2::Repository, commit_id: &str) -> AppResult<Vec<
         .tree()
         .map_err(|e| AppError::Git(format!("读取提交树失败: {e}")))?;
     let parent_tree = first_parent_tree(&commit)?;
+    changed_files_between_trees(
+        repo,
+        parent_tree.as_ref(),
+        Some(&new_tree),
+        &format!("提交 {commit_id}"),
+    )
+}
 
+/// 两个提交或引用之间的变更文件列表（`base_ref` → `target_ref`）。
+pub fn changed_files_range(
+    repo: &git2::Repository,
+    base_ref: &str,
+    target_ref: &str,
+) -> AppResult<Vec<ChangedFile>> {
+    let base_tree = resolve_tree(repo, base_ref)?;
+    let target_tree = resolve_tree(repo, target_ref)?;
+    changed_files_between_trees(
+        repo,
+        Some(&base_tree),
+        Some(&target_tree),
+        &format!("{base_ref}..{target_ref}"),
+    )
+}
+
+fn changed_files_between_trees(
+    repo: &git2::Repository,
+    old_tree: Option<&git2::Tree<'_>>,
+    new_tree: Option<&git2::Tree<'_>>,
+    label: &str,
+) -> AppResult<Vec<ChangedFile>> {
     let mut opts = git2::DiffOptions::new();
     opts.context_lines(0);
     let mut diff = repo
-        .diff_tree_to_tree(parent_tree.as_ref(), Some(&new_tree), Some(&mut opts))
-        .map_err(|e| AppError::Git(format!("计算提交 {commit_id} 的 diff 失败: {e}")))?;
+        .diff_tree_to_tree(old_tree, new_tree, Some(&mut opts))
+        .map_err(|e| AppError::Git(format!("计算 {label} 的 diff 失败: {e}")))?;
     find_similar(&mut diff)?;
 
     let mut files = Vec::with_capacity(diff.deltas().len());
@@ -85,22 +114,45 @@ pub fn file_diff_commit(
         .tree()
         .map_err(|e| AppError::Git(format!("读取提交树失败: {e}")))?;
     let parent_tree = first_parent_tree(&commit)?;
+    file_diff_between_trees(repo, parent_tree.as_ref(), Some(&new_tree), path, "该提交")
+}
 
+/// 两个提交或引用之间单个文件的左右分栏 diff（`base_ref` → `target_ref`）。
+pub fn file_diff_range(
+    repo: &git2::Repository,
+    base_ref: &str,
+    target_ref: &str,
+    path: &str,
+) -> AppResult<FileDiffResult> {
+    let base_tree = resolve_tree(repo, base_ref)?;
+    let target_tree = resolve_tree(repo, target_ref)?;
+    file_diff_between_trees(
+        repo,
+        Some(&base_tree),
+        Some(&target_tree),
+        path,
+        &format!("{base_ref}..{target_ref}"),
+    )
+}
+
+fn file_diff_between_trees(
+    repo: &git2::Repository,
+    old_tree: Option<&git2::Tree<'_>>,
+    new_tree: Option<&git2::Tree<'_>>,
+    path: &str,
+    scope_label: &str,
+) -> AppResult<FileDiffResult> {
     let (status, old_path, new_path) =
-        tree_delta_info(repo, parent_tree.as_ref(), Some(&new_tree), path)?;
+        tree_delta_info(repo, old_tree, new_tree, path, scope_label)?;
     let old = if status == git2::Delta::Added {
         None
     } else {
-        blob_bytes_from_tree(
-            repo,
-            parent_tree.as_ref(),
-            old_path.as_deref().unwrap_or(path),
-        )?
+        blob_bytes_from_tree(repo, old_tree, old_path.as_deref().unwrap_or(path))?
     };
     let new = if status == git2::Delta::Deleted {
         None
     } else {
-        blob_bytes_from_tree(repo, Some(&new_tree), new_path.as_deref().unwrap_or(path))?
+        blob_bytes_from_tree(repo, new_tree, new_path.as_deref().unwrap_or(path))?
     };
     let change_type = delta_change_type(status).unwrap_or(ChangeType::Modified);
     Ok(build_file_diff(old, new, old_path, new_path, change_type))
@@ -206,11 +258,26 @@ fn first_parent_tree<'r>(commit: &git2::Commit<'r>) -> AppResult<Option<git2::Tr
     Ok(Some(tree))
 }
 
+fn resolve_tree<'r>(repo: &'r git2::Repository, rev: &str) -> AppResult<git2::Tree<'r>> {
+    let trimmed = rev.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidArg(
+            "对比引用或提交 id 不能为空".to_string(),
+        ));
+    }
+    let obj = repo
+        .revparse_single(trimmed)
+        .map_err(|e| AppError::NotFound(format!("无法解析引用或提交 {trimmed}: {e}")))?;
+    obj.peel_to_tree()
+        .map_err(|e| AppError::NotFound(format!("引用 {trimmed} 未指向有效的提交树: {e}")))
+}
+
 fn tree_delta_info(
     repo: &git2::Repository,
     old_tree: Option<&git2::Tree<'_>>,
     new_tree: Option<&git2::Tree<'_>>,
     path: &str,
+    scope_label: &str,
 ) -> AppResult<(git2::Delta, Option<String>, Option<String>)> {
     let mut opts = git2::DiffOptions::new();
     opts.context_lines(0);
@@ -219,7 +286,7 @@ fn tree_delta_info(
         .map_err(|e| AppError::Git(format!("计算 {path} 的 diff 失败: {e}")))?;
     find_similar(&mut diff)?;
     let delta = find_delta(diff.deltas(), path, true)
-        .ok_or_else(|| AppError::NotFound(format!("文件 {path} 在该提交中无变更")))?;
+        .ok_or_else(|| AppError::NotFound(format!("文件 {path} 在{scope_label}中无变更")))?;
     Ok((
         delta.status(),
         path_str(delta.old_file().path()),
@@ -227,7 +294,7 @@ fn tree_delta_info(
     ))
 }
 
-fn find_delta<'d>(
+pub(super) fn find_delta<'d>(
     deltas: git2::Deltas<'d>,
     path: &str,
     prefer_new: bool,
@@ -247,7 +314,7 @@ fn find_delta<'d>(
     other_side
 }
 
-fn find_similar(diff: &mut git2::Diff<'_>) -> AppResult<()> {
+pub(super) fn find_similar(diff: &mut git2::Diff<'_>) -> AppResult<()> {
     let mut opts = git2::DiffFindOptions::new();
     opts.renames(true)
         .copies(true)
@@ -257,7 +324,7 @@ fn find_similar(diff: &mut git2::Diff<'_>) -> AppResult<()> {
         .map_err(|e| AppError::Git(format!("重命名检测失败: {e}")))
 }
 
-fn blob_bytes_from_tree(
+pub(super) fn blob_bytes_from_tree(
     repo: &git2::Repository,
     tree: Option<&git2::Tree<'_>>,
     path: &str,
@@ -286,7 +353,7 @@ fn blob_bytes_from_tree(
     Ok(Some(blob.content().to_vec()))
 }
 
-fn blob_bytes_from_index(
+pub(super) fn blob_bytes_from_index(
     repo: &git2::Repository,
     index: &git2::Index,
     path: &str,

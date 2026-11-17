@@ -388,3 +388,105 @@
   font-size: 11px;
   color: var(--color-danger);
 }
+
+/* ---- 4.3 范围对比与 4.4 GPG/SSH 签名徽标 ---- */
+
+.cd-sig {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-0);
+  font-size: 11px;
+}
+
+.cd-sig svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+.cd-sig--verified {
+  border-color: color-mix(in oklch, var(--color-success) 42%, transparent);
+  background: color-mix(in oklch, var(--color-success) 10%, var(--surface-0));
+  color: var(--color-success);
+}
+
+.cd-sig--warn {
+  border-color: color-mix(in oklch, var(--color-warning) 42%, transparent);
+  background: color-mix(in oklch, var(--color-warning) 10%, var(--surface-0));
+  color: var(--color-warning);
+}
+
+.cd-sig--danger {
+  border-color: color-mix(in oklch, var(--color-danger) 42%, transparent);
+  background: color-mix(in oklch, var(--color-danger) 10%, var(--surface-0));
+  color: var(--color-danger);
+}
+
+.cd-sig--muted {
+  color: var(--text-muted);
+}
+
+.cd-sig-label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cd-sig-signer {
+  margin-left: auto;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cd-range-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  background: var(--surface-0);
+}
+
+.cd-range-endpoints {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cd-range-point {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cd-range-kicker {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.cd-range-label {
+  font-family: var(--font-code);
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cd-range-arrow {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.cd-range-swap {
+  justify-content: center;
+}

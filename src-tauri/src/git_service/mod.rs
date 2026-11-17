@@ -2,29 +2,40 @@
 //!
 //! 按职责拆分为子模块并统一在此重导出，保持外部调用契约稳定：
 //! - [`history`]：分页提交遍历与过滤器；
-//! - [`diff`]：提交 / 暂存区 / 工作区文件差异计算；
+//! - [`diff`]：提交 / 范围 / 暂存区 / 工作区文件差异计算；
+//! - [`patch`]：Hunk 与行级局部暂存 / 取消暂存 / 丢弃；
 //! - [`status`]：工作区状态、stage / unstage；
-//! - [`commit`]：创建提交与状态收尾；
-//! - [`branch`]：分支列表、检出与远程跟踪分支。
+//! - [`commit`]：创建提交、模板与签名元数据、状态收尾；
+//! - [`branch`]：分支列表、检出与远程跟踪分支；
+//! - [`rebase`]：轻量交互式变基（squash / fixup / reword 最近提交）。
 
 mod branch;
 mod commit;
 mod diff;
 mod history;
+mod patch;
+mod rebase;
 mod status;
 
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::path::{Component, Path};
 
 use crate::error::{AppError, AppResult};
 use crate::types::{ChangeType, ChildRepo, RepoInfo, RepoState};
 
 pub use branch::{checkout_branch, list_branches};
-pub use commit::create_commit;
-pub use diff::{changed_files, file_diff_commit, file_diff_staged, file_diff_workdir};
+pub use commit::{
+    commit_metadata, commit_signature_info, create_commit, create_commit_with_options,
+};
+pub use diff::{
+    changed_files, changed_files_range, file_diff_commit, file_diff_range, file_diff_staged,
+    file_diff_workdir,
+};
 pub use history::load_commit_page;
+pub use patch::apply_diff_selection;
+pub use rebase::{list_rebase_commits, rewrite_recent_commits};
 pub use status::{stage_file, status, unstage_file};
 
 /// 扫描目录的直接子目录，返回其中的 Git 仓库（按名称排序）。
@@ -192,6 +203,25 @@ pub(super) fn delta_change_type(status: git2::Delta) -> Option<ChangeType> {
         git2::Delta::Untracked => Some(ChangeType::Untracked),
         _ => None,
     }
+}
+
+/// 校验仓库内相对路径合法性（非空、非绝对路径、不含 `..` / `/` 根或盘符）。
+pub(crate) fn validate_rel_path(path: &str) -> AppResult<&Path> {
+    if path.is_empty() {
+        return Err(AppError::InvalidArg("path 不能为空".to_string()));
+    }
+    let rel = Path::new(path);
+    if rel.is_absolute()
+        || rel.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(AppError::InvalidArg(format!("非法相对路径: {path}")));
+    }
+    Ok(rel)
 }
 
 /// `&Path` → 展示用字符串。

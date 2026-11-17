@@ -188,11 +188,75 @@ export interface FileStatus {
 }
 
 /** diff 范围类别。 */
-export type DiffScopeKind = "commit" | "staged" | "workdir";
+export type DiffScopeKind = "commit" | "range" | "staged" | "workdir";
 
 /** diff 查询范围（get_file_diff 参数）。 */
 export type DiffScope =
-  { kind: "commit"; commitId: string } | { kind: "staged" } | { kind: "workdir" };
+  | { kind: "commit"; commitId: string }
+  | { kind: "range"; baseRef: string; targetRef: string }
+  | { kind: "staged" }
+  | { kind: "workdir" };
+
+/** 范围对比展示信息（用于日志面板双提交或分支对比）。 */
+export interface CompareRange {
+  baseRef: string;
+  targetRef: string;
+  baseLabel: string;
+  targetLabel: string;
+}
+
+/** Hunk / 行级局部变更动作。 */
+export type DiffPatchAction = "stage" | "unstage" | "discard";
+
+/** 局部选区覆盖的 diff 侧。 */
+export type PatchSide = "old" | "new" | "both";
+
+/** 单行选区目标（对应 FileDiffResult.rows 下标）。 */
+export interface DiffLineSelection {
+  rowIndex: number;
+  side: PatchSide;
+}
+
+/** 提交面板所需的仓库配置元数据（模板与 GPG/SSH 签名配置）。 */
+export interface CommitMetadata {
+  commitTemplate: string | null;
+  gpgSignEnabled: boolean;
+  signingKey: string | null;
+  gpgFormat: string;
+}
+
+/** 历史提交的签名校验状态。 */
+export type SignatureStatus =
+  "verified" | "untrusted" | "bad" | "expired" | "revoked" | "unverifiable" | "unsigned";
+
+/** 提交的 GPG / SSH 签名详情。 */
+export interface CommitSignatureInfo {
+  commitId: string;
+  status: SignatureStatus;
+  signer: string | null;
+  keyId: string | null;
+}
+
+/** 轻量交互式变基的单条动作。 */
+export type RebaseAction = "pick" | "reword" | "squash" | "fixup";
+
+/** 可参与轻量交互式 rebase 的最近线性提交条目（从旧到新）。 */
+export interface RebaseCommitEntry {
+  id: string;
+  shortId: string;
+  subject: string;
+  fullMessage: string;
+  authorName: string;
+  authorEmail: string;
+  timestamp: number;
+}
+
+/** 轻量交互式 rebase 计划单条。 */
+export interface RebasePlanEntry {
+  commitId: string;
+  action: RebaseAction;
+  message: string | null;
+}
 
 /** AppError 序列化后的载荷（invoke reject 时收到）。 */
 export interface AppErrorPayload {

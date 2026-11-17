@@ -10,11 +10,27 @@ vi.mock("../api/client", () => ({
   removeRecentRepository: vi.fn(async () => []),
   getCommitGraph: vi.fn(async () => ({ rows: [], nextCursor: null, hasMore: false })),
   getCommitFiles: vi.fn(async () => []),
+  getRangeFiles: vi.fn(async () => []),
   getFileDiff: vi.fn(),
+  applyDiffSelection: vi.fn(async () => {}),
   getFileStatus: vi.fn(async () => []),
   stageFile: vi.fn(async () => {}),
   unstageFile: vi.fn(async () => {}),
   createCommit: vi.fn(async () => "abc1234"),
+  getCommitMetadata: vi.fn(async () => ({
+    commitTemplate: null,
+    gpgSignEnabled: false,
+    signingKey: null,
+    gpgFormat: "openpgp",
+  })),
+  getCommitSignature: vi.fn(async () => ({
+    commitId: "1111111",
+    status: "unsigned",
+    signer: null,
+    keyId: null,
+  })),
+  listRebaseCommits: vi.fn(async () => []),
+  rewriteRecentCommits: vi.fn(),
   listBranches: vi.fn(async () => []),
   checkoutBranch: vi.fn(),
   fetchRepository: vi.fn(),
@@ -191,5 +207,71 @@ describe("useAppStore slices", () => {
     store.getState().setTheme("light");
     expect(store.getState().theme).toBe("light");
     expect(window.localStorage.getItem("openpatchline:theme")).toBe("light");
+  });
+
+  it("supports range compare, swap direction, and commit history persistence", async () => {
+    const store = createAppStore();
+    mockedApi.openRepository.mockResolvedValueOnce({ kind: "opened", repo: baseRepo });
+    await store.getState().openRepo("/tmp/demo");
+
+    mockedApi.getRangeFiles.mockResolvedValueOnce([
+      { path: "diff.ts", oldPath: null, changeType: "modified", additions: 2, deletions: 1 },
+    ]);
+    await store.getState().compareBranchWithCurrent("feat/ui");
+    expect(mockedApi.getRangeFiles).toHaveBeenCalledWith("/tmp/demo", "main", "feat/ui");
+    expect(store.getState().compareRange).toEqual({
+      baseRef: "main",
+      targetRef: "feat/ui",
+      baseLabel: "main",
+      targetLabel: "feat/ui",
+    });
+    expect(store.getState().rangeFiles).toHaveLength(1);
+
+    mockedApi.getRangeFiles.mockResolvedValueOnce([]);
+    await store.getState().swapCompareRange();
+    expect(mockedApi.getRangeFiles).toHaveBeenLastCalledWith("/tmp/demo", "feat/ui", "main");
+
+    await store.getState().createCommit("feat: history record");
+    expect(store.getState().commitHistory[0]).toBe("feat: history record");
+  });
+
+  it("handles applyDiffSelection refresh and advances back to log when file cleared", async () => {
+    const store = createAppStore();
+    mockedApi.openRepository.mockResolvedValueOnce({ kind: "opened", repo: baseRepo });
+    await store.getState().openRepo("/tmp/demo");
+
+    const file: ChangedFile = {
+      path: "a.ts",
+      oldPath: null,
+      changeType: "modified",
+      additions: 1,
+      deletions: 0,
+    };
+    mockedApi.getFileDiff.mockResolvedValueOnce({
+      oldPath: "a.ts",
+      newPath: "a.ts",
+      changeType: "modified",
+      isBinary: false,
+      tooLarge: false,
+      rows: [],
+      changeRowIndices: [],
+      additions: 1,
+      deletions: 0,
+    });
+    await store.getState().openFileDiff({ kind: "workdir" }, [file], 0);
+
+    mockedApi.getFileStatus.mockResolvedValueOnce([
+      { path: "a.ts", staged: "modified", unstaged: null, conflicted: false },
+    ]);
+    const ok = await store.getState().applyDiffSelection("stage", [{ rowIndex: 0, side: "new" }]);
+    expect(ok).toBe(true);
+    expect(mockedApi.applyDiffSelection).toHaveBeenCalledWith(
+      "/tmp/demo",
+      { kind: "workdir" },
+      "a.ts",
+      "stage",
+      [{ rowIndex: 0, side: "new" }],
+    );
+    expect(store.getState().activeView).toBe("log");
   });
 });

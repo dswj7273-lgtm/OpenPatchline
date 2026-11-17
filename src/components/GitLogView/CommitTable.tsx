@@ -50,7 +50,9 @@ function refBadgeClass(kind: RefLabel["kind"]): string {
 export function CommitTable() {
   const rows = useAppStore((s) => s.graphRows);
   const selectedCommitId = useAppStore((s) => s.selectedCommitId);
+  const compareRange = useAppStore((s) => s.compareRange);
   const selectCommit = useAppStore((s) => s.selectCommit);
+  const toggleCommitForCompare = useAppStore((s) => s.toggleCommitForCompare);
   const loadMoreCommits = useAppStore((s) => s.loadMoreCommits);
   const hasMore = useAppStore((s) => s.hasMore);
   const graphLoading = useAppStore((s) => s.graphLoading);
@@ -112,7 +114,9 @@ export function CommitTable() {
     >
       <div className="commit-table-header" aria-hidden="true">
         <span className="cth-graph">泳道</span>
-        <span className="cth-msg">提交信息</span>
+        <span className="cth-msg" title="提示：按住 Cmd/Ctrl 单击两条提交可对比差异范围">
+          提交信息
+        </span>
         <span className="cth-author">作者</span>
         <span className="cth-date">时间</span>
       </div>
@@ -131,39 +135,58 @@ export function CommitTable() {
             scrollTop={scrollTop}
             viewportH={viewportH}
           />
-          {windowRows.map(({ row, index }) => (
-            <div
-              key={row.commit.id}
-              className={row.commit.id === selectedCommitId ? "commit-row selected" : "commit-row"}
-              style={{ top: index * ROW_H }}
-              role="row"
-              aria-rowindex={index + 1}
-              onClick={() => void selectCommit(row.commit.id)}
-            >
-              <span className="ct-graph" aria-hidden="true" />
-              <div className="ct-content" role="presentation">
-                <div className="ct-msg" role="gridcell" title={row.commit.message}>
-                  <span className="ct-hash">{row.commit.shortId}</span>
-                  <span className="ct-msg-text">{row.commit.message}</span>
-                  {row.commit.refs.map((ref) => (
-                    <span key={`${ref.kind}:${ref.name}`} className={refBadgeClass(ref.kind)}>
-                      {ref.name}
-                    </span>
-                  ))}
+          {windowRows.map(({ row, index }) => {
+            const isSelected = row.commit.id === selectedCommitId;
+            const isBase = compareRange?.baseRef === row.commit.id;
+            const isTarget = compareRange?.targetRef === row.commit.id;
+            const rowClass = isSelected
+              ? "commit-row selected"
+              : isBase || isTarget
+                ? "commit-row is-compare"
+                : "commit-row";
+            return (
+              <div
+                key={row.commit.id}
+                className={rowClass}
+                style={{ top: index * ROW_H }}
+                role="row"
+                aria-rowindex={index + 1}
+                aria-selected={isSelected || isBase || isTarget}
+                onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey) {
+                    void toggleCommitForCompare(row.commit.id);
+                  } else {
+                    void selectCommit(row.commit.id);
+                  }
+                }}
+              >
+                <span className="ct-graph" aria-hidden="true" />
+                <div className="ct-content" role="presentation">
+                  <div className="ct-msg" role="gridcell" title={row.commit.message}>
+                    <span className="ct-hash">{row.commit.shortId}</span>
+                    {isBase && <span className="badge ct-compare-badge">基线</span>}
+                    {isTarget && <span className="badge ct-compare-badge is-target">目标</span>}
+                    <span className="ct-msg-text">{row.commit.message}</span>
+                    {row.commit.refs.map((ref) => (
+                      <span key={`${ref.kind}:${ref.name}`} className={refBadgeClass(ref.kind)}>
+                        {ref.name}
+                      </span>
+                    ))}
+                  </div>
+                  <span className="ct-author" role="gridcell" title={row.commit.authorName}>
+                    {row.commit.authorName}
+                  </span>
+                  <span
+                    className="ct-date"
+                    role="gridcell"
+                    title={formatAbsolute(row.commit.timestamp)}
+                  >
+                    {formatRelative(row.commit.timestamp)}
+                  </span>
                 </div>
-                <span className="ct-author" role="gridcell" title={row.commit.authorName}>
-                  {row.commit.authorName}
-                </span>
-                <span
-                  className="ct-date"
-                  role="gridcell"
-                  title={formatAbsolute(row.commit.timestamp)}
-                >
-                  {formatRelative(row.commit.timestamp)}
-                </span>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         {rows.length === 0 && (
           <div className="commit-table-empty">

@@ -16,8 +16,8 @@
 //!   SIGTERM/SIGKILL，立即中止 git 及其 ssh/http 辅助进程）。
 
 use std::collections::HashMap;
-use std::io::Read;
-use std::path::{Component, Path};
+use std::io::{Read, Write};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -164,13 +164,22 @@ pub fn parse_progress_percent(line: &str) -> Option<u8> {
 }
 
 /// 启动 `git <args..>` 子进程，配置非交互环境变量与独立进程组。
-fn spawn_git_command(workdir: &Path, args: &[&str]) -> AppResult<Child> {
+fn spawn_git_command_with_stdin(
+    workdir: &Path,
+    args: &[&str],
+    pipe_stdin: bool,
+) -> AppResult<Child> {
     for bin in GIT_BIN_CANDIDATES {
         let mut cmd = Command::new(bin);
         cmd.current_dir(workdir)
             .args(args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_EDITOR", "true")
+            .stdin(if pipe_stdin {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(unix)]
@@ -232,7 +241,7 @@ fn run_git_raw_with(
     args: &[&str],
     progress: Option<RemoteProgress<'_>>,
 ) -> AppResult<(String, String)> {
-    let mut child = spawn_git_command(workdir, args)?;
+    let mut child = spawn_git_command_with_stdin(workdir, args, false)?;
     let Some(progress) = progress else {
         let output = child
             .wait_with_output()
@@ -328,6 +337,53 @@ fn finish_git_output(
         )));
     }
     Ok((stdout, stderr))
+}
+
+/// 在 `workdir` 下运行 `git <args..>` 子进程，可选通过 stdin 传入字节载荷，返回原始 `(stdout, stderr)`。
+pub(crate) fn run_git_with_input(
+    workdir: &Path,
+    args: &[&str],
+    stdin_data: Option<&[u8]>,
+) -> AppResult<(String, String)> {
+    let Some(bytes) = stdin_data else {
+        return run_git_raw_with(workdir, args, None);
+    };
+    let mut child = spawn_git_command_with_stdin(workdir, args, true)?;
+    let stdin_pipe = child.stdin.take();
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+    let (write_res, stdout_bytes, stderr_bytes) = std::thread::scope(|s| {
+        let t_in = s.spawn(move || -> std::io::Result<()> {
+            if let Some(mut w) = stdin_pipe {
+                w.write_all(bytes)?;
+                w.flush()?;
+            }
+            Ok(())
+        });
+        let t_out = s.spawn(|| match stdout_pipe {
+            Some(r) => drain_stream(r, |_| {}),
+            None => Vec::new(),
+        });
+        let t_err = s.spawn(|| match stderr_pipe {
+            Some(r) => drain_stream(r, |_| {}),
+            None => Vec::new(),
+        });
+        (
+            t_in.join()
+                .unwrap_or_else(|_| Err(std::io::Error::other("stdin 写入线程异常退出"))),
+            t_out.join().unwrap_or_default(),
+            t_err.join().unwrap_or_default(),
+        )
+    });
+    let status = child
+        .wait()
+        .map_err(|e| AppError::Io(format!("等待 git 子进程失败: {e}")))?;
+    if status.success()
+        && let Err(e) = write_res
+    {
+        return Err(AppError::Io(format!("向 git 子进程写入 stdin 失败: {e}")));
+    }
+    finish_git_output(args, status.success(), stdout_bytes, stderr_bytes, false)
 }
 
 /// 在 `workdir` 下运行 `git <args..>` 子进程，返回原始 `(stdout, stderr)`。
@@ -848,20 +904,7 @@ pub fn reset_head(
 /// - 仅在暂存区（如 unborn HEAD / 新暂存文件）的文件执行 `git checkout -- <path>`；
 /// - 未跟踪文件直接从工作区删除。
 pub fn discard_file(repo: &git2::Repository, workdir: &Path, path: &str) -> AppResult<()> {
-    if path.is_empty() {
-        return Err(AppError::InvalidArg("path 不能为空".to_string()));
-    }
-    let rel = Path::new(path);
-    if rel.is_absolute()
-        || rel.components().any(|c| {
-            matches!(
-                c,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(AppError::InvalidArg(format!("非法相对路径: {path}")));
-    }
+    let rel = git_service::validate_rel_path(path)?;
 
     let in_head = repo
         .head()
