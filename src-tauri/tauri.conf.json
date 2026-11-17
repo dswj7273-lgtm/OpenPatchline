@@ -1,6 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "openpatchline",
+  "productName": "OpenPatchline",
+  "version": "0.6.0",
   "identifier": "com.openpatchline.app",
   "build": {
     "beforeDevCommand": "npm run dev",

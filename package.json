@@ -1,7 +1,7 @@
 {
   "name": "openpatchline",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.6.0",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -21,7 +21,8 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "version:bump": "node scripts/bump-version.mjs"
   },
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.3",
