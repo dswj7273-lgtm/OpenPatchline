@@ -179,8 +179,13 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
       return {
         commitId: c.id,
         action: act,
+        // Reword 未编辑时沿用输入框展示的原说明（与校验 / 预览同一回退口径）。
         message:
-          act === "reword" || act === "squash" ? (messages[c.id] ?? "").trim() || null : null,
+          act === "reword"
+            ? (messages[c.id] ?? c.fullMessage).trim() || null
+            : act === "squash"
+              ? (messages[c.id] ?? "").trim() || null
+              : null,
       };
     });
     const ok = await interactiveRebase(plan);

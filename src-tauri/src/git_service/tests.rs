@@ -346,7 +346,8 @@ fn file_diff_commit_renamed() {
     );
 
     // 按旧路径查询也应定位到同一配对。
-    let d_old = file_diff_commit(&repo, &c2, "a.txt", false).expect("file_diff_commit(旧路径) 失败");
+    let d_old =
+        file_diff_commit(&repo, &c2, "a.txt", false).expect("file_diff_commit(旧路径) 失败");
     assert!(matches!(d_old.change_type, ChangeType::Renamed));
     assert_eq!(d_old.new_path.as_deref(), Some("b.txt"));
 }
@@ -973,7 +974,7 @@ fn partial_hunk_and_line_stage_unstage_discard() {
             row_index: h1_idx,
             side: PatchSide::Both,
         }],
-    false,
+        false,
     )
     .unwrap();
 
@@ -998,7 +999,7 @@ fn partial_hunk_and_line_stage_unstage_discard() {
             row_index: row_10b,
             side: PatchSide::New,
         }],
-    false,
+        false,
     )
     .unwrap();
 
@@ -1017,7 +1018,7 @@ fn partial_hunk_and_line_stage_unstage_discard() {
             row_index: 1,
             side: PatchSide::Both,
         }],
-    false,
+        false,
     )
     .unwrap();
     let staged_after_unstage = index_blob_text(&repo, "sample.txt").unwrap();
@@ -1041,7 +1042,7 @@ fn partial_hunk_and_line_stage_unstage_discard() {
             row_index: row_l2,
             side: PatchSide::Both,
         }],
-    false,
+        false,
     )
     .unwrap();
     let disk_after_discard = std::fs::read_to_string(dir.path().join("sample.txt")).unwrap();
@@ -1071,7 +1072,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
             row_index: diff_crlf.change_row_indices[0],
             side: PatchSide::Both,
         }],
-    false,
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -1092,7 +1093,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
             row_index: diff_nl.change_row_indices[0],
             side: PatchSide::Both,
         }],
-    false,
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -1109,7 +1110,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
             row_index: s_nl.change_row_indices[0],
             side: PatchSide::Both,
         }],
-    false,
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -1128,7 +1129,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
             row_index: 1,
             side: PatchSide::New,
         }],
-    false,
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -1157,7 +1158,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
             row_index: row_first,
             side: PatchSide::New,
         }],
-    false,
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -1186,7 +1187,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
             row_index: r2_row,
             side: PatchSide::Both,
         }],
-    false,
+        false,
     )
     .unwrap();
     assert!(index_blob_text(&repo, "old_name.txt").is_none());
@@ -1212,7 +1213,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
                 row_index: 0,
                 side: PatchSide::Both,
             }],
-        false,
+            false,
         )
         .is_err()
     );
@@ -1226,7 +1227,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
                 row_index: 9999,
                 side: PatchSide::Both,
             }],
-        false,
+            false,
         )
         .is_err()
     );
@@ -1412,7 +1413,10 @@ fn diff_and_stage_reject_path_traversal_and_symlinks() {
     // 1) 非法路径 / 越界相对路径一律拦截
     for bad in ["../secret.txt", "/etc/passwd", ".", ""] {
         assert!(
-            matches!(file_diff_workdir(&repo, bad, false), Err(AppError::InvalidArg(_))),
+            matches!(
+                file_diff_workdir(&repo, bad, false),
+                Err(AppError::InvalidArg(_))
+            ),
             "file_diff_workdir 应拦截 {bad}"
         );
         assert!(
@@ -1725,6 +1729,23 @@ fn file_history_follows_rename() {
     assert_eq!(limited.len(), 2);
 }
 
+/// review 修复（路径转义）：`git log --name-status` 默认 C 风格引号会把
+/// 非 ASCII 路径输出成 `"\350\257\244…"` 八进制串；`-z` 后应得到原始路径。
+#[test]
+fn file_history_non_ascii_path_not_quoted() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    let _c1 = commit_file(&repo, "src/说明文档.txt", "v1\n", "创建中文文件");
+    let _c2 = commit_file(&repo, "src/说明文档.txt", "v1\nv2\n", "修改中文文件");
+
+    let hist = file_history(&repo, "src/说明文档.txt", 100).expect("file_history 失败");
+    assert_eq!(hist.len(), 2, "非 ASCII 路径应命中两条提交");
+    assert_eq!(hist[0].path, "src/说明文档.txt", "路径不应被引号转义");
+    assert_eq!(hist[1].path, "src/说明文档.txt", "路径不应被引号转义");
+    assert_eq!(hist[0].change_type, ChangeType::Modified);
+    assert_eq!(hist[1].change_type, ChangeType::Added);
+}
+
 /// review 修复 #3：合并历史（侧分支重命名 a→b）不影响主线 b.txt 的历史。
 #[test]
 fn file_history_survives_merge_history_with_side_rename() {
@@ -1743,7 +1764,13 @@ fn file_history_survives_merge_history_with_side_rename() {
             &sig(),
             &sig(),
             "side base",
-            &repo.head().unwrap().peel_to_commit().unwrap().tree().unwrap(),
+            &repo
+                .head()
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .tree()
+                .unwrap(),
             &[&repo.head().unwrap().peel_to_commit().unwrap()],
         )
         .unwrap();
@@ -1751,7 +1778,7 @@ fn file_history_survives_merge_history_with_side_rename() {
         .find_commit(side_commit0)
         .expect("解析侧分支基准提交失败");
     rename_on_disk(&repo, "a.txt", "b.txt");
-    {
+    let rename_oid = {
         let mut index = repo.index().unwrap();
         index.remove_path(Path::new("a.txt")).unwrap();
         index.add_path(Path::new("b.txt")).unwrap();
@@ -1765,11 +1792,17 @@ fn file_history_survives_merge_history_with_side_rename() {
             &tree,
             &[&side_commit0],
         )
-        .unwrap();
-    }
-    // 回到默认分支（HEAD）并合并 side-src
+        .unwrap()
+    };
+    // 回到默认分支（HEAD）并合并 side-src 的**重命名提交**（此前误合
+    // side base，重命名不在 HEAD 祖先里，测不到 follow 场景）
     let default_branch = repo.head().unwrap().shorthand().unwrap().to_string();
-    let main_tip = repo.find_reference(&format!("refs/heads/{default_branch}")).unwrap().peel_to_commit().unwrap();
+    let main_tip = repo
+        .find_reference(&format!("refs/heads/{default_branch}"))
+        .unwrap()
+        .peel_to_commit()
+        .unwrap();
+    let rename_commit = repo.find_commit(rename_oid).expect("解析重命名提交失败");
     std::fs::write(dir.path().join("a.txt"), "aaa merged\n").unwrap();
     std::fs::remove_file(dir.path().join("b.txt")).unwrap();
     // 合并会冲突（两侧都有 b.txt）——改用手工合并树：保留主线 b.txt 内容与 a.txt
@@ -1784,7 +1817,7 @@ fn file_history_survives_merge_history_with_side_rename() {
         &sig(),
         "merge side-src",
         &merge_tree,
-        &[&main_tip, &side_commit0],
+        &[&main_tip, &rename_commit],
     )
     .unwrap();
     // 主线后续再改 b.txt
@@ -1811,7 +1844,11 @@ fn stash_files_and_diff_match_git_show() {
         .args(["stash", "push", "-u", "-m", "wip"])
         .output()
         .expect("git stash push 失败");
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let files = changed_files_stash(&repo, 0).expect("changed_files_stash 失败");
     assert_eq!(files.len(), 1);
@@ -1864,15 +1901,27 @@ fn stash_preview_indexes_latest_and_includes_untracked() {
     // stash@{0} = 最新（B）：b.txt 修改 + new.txt 未跟踪
     let files = changed_files_stash(&repo, 0).expect("stash@{0} 失败");
     let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
-    assert!(paths.contains(&"b.txt"), "stash@{{0}} 应含 b.txt，实际 {paths:?}");
+    assert!(
+        paths.contains(&"b.txt"),
+        "stash@{{0}} 应含 b.txt，实际 {paths:?}"
+    );
     assert!(paths.contains(&"new.txt"), "-u 未跟踪文件应参与预览");
     assert!(!paths.contains(&"a.txt"), "stash@{{0}} 不应看到最旧的 A");
+    // 未跟踪树应对空树 diff：未动过的跟踪文件不得被误标为删除
+    assert!(
+        !paths.contains(&"base.txt"),
+        "未动过的跟踪文件不应出现在预览（幽灵删除），实际 {paths:?}"
+    );
 
     // stash@{1} = A：a.txt 修改
     let files1 = changed_files_stash(&repo, 1).expect("stash@{1} 失败");
     let paths1: Vec<&str> = files1.iter().map(|f| f.path.as_str()).collect();
     assert!(paths1.contains(&"a.txt"));
     assert!(!paths1.contains(&"b.txt"));
+    assert!(
+        !paths1.contains(&"base.txt"),
+        "stash@{{1}} 不应误标未动过的跟踪文件，实际 {paths1:?}"
+    );
 
     // 未跟踪文件单文件 diff 可看
     let diff = file_diff_stash(&repo, 0, "new.txt", false).expect("未跟踪 diff 失败");
@@ -1887,7 +1936,14 @@ fn stash_preview_indexes_latest_and_includes_untracked() {
         .unwrap();
     assert!(out.status.success());
     let files2 = changed_files_stash(&repo, 0).expect("untracked-only 贮藏失败");
+    let paths2: Vec<&str> = files2.iter().map(|f| f.path.as_str()).collect();
     assert!(files2.iter().any(|f| f.path == "solo.txt"));
+    // 只含未跟踪文件时，预览不应把全部跟踪文件标成删除
+    assert_eq!(
+        paths2,
+        vec!["solo.txt"],
+        "untracked-only 贮藏应只含 solo.txt，实际 {paths2:?}"
+    );
 }
 
 /// v0.7 / 7.5：branches_containing 按祖先关系判定（本地 + 远程）。
@@ -1902,12 +1958,7 @@ fn branches_containing_by_ancestry() {
     repo.branch("side", &c1_commit, false).unwrap();
 
     // 当前分支（HEAD）包含 c1 与 c2；side 只包含 c1。
-    let head_name = repo
-        .head()
-        .unwrap()
-        .shorthand()
-        .unwrap()
-        .to_string();
+    let head_name = repo.head().unwrap().shorthand().unwrap().to_string();
     let containing_c2 = branches_containing(&repo, &c2).unwrap();
     assert_eq!(containing_c2, vec![head_name]);
     let containing_c1 = branches_containing(&repo, &c1).unwrap();

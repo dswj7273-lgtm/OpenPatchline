@@ -99,11 +99,18 @@ mod tests {
         let plain = build_editor_args("idea", "/tmp/x.rs", None).unwrap();
         assert_eq!(plain, vec!["idea", "/tmp/x.rs"]);
 
-        let quoted = build_editor_args("\"/Apps/My Editor.app/Contents/MacOS/app\" {path}", "/f.ts", None)
-            .unwrap();
+        let quoted = build_editor_args(
+            "\"/Apps/My Editor.app/Contents/MacOS/app\" {path}",
+            "/f.ts",
+            None,
+        )
+        .unwrap();
         assert_eq!(
             quoted,
-            vec!["/Apps/My Editor.app/Contents/MacOS/app".to_string(), "/f.ts".to_string()]
+            vec![
+                "/Apps/My Editor.app/Contents/MacOS/app".to_string(),
+                "/f.ts".to_string()
+            ]
         );
 
         // 无 {line} 占位符时行号被忽略

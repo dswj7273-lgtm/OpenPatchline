@@ -214,12 +214,16 @@ pub fn file_history(
         .ok_or_else(|| AppError::InvalidArg("bare 仓库没有工作区".to_string()))?
         .to_path_buf();
     let limit = limit.clamp(1, MAX_HISTORY_LIMIT);
+    // `-z`：name-status 以 NUL 分列，路径不做 C 风格转义（core.quotePath
+    // 默认开启时，中文等非 ASCII 路径会输出成 "\350\257\244…" 八进制串，
+    // 后续 diff / 恢复 / Blame 均无法匹配）。
     let out = crate::git_remote::run_git_for_service(
         &workdir,
         &[
             "log",
             "--follow",
             &format!("-n{limit}"),
+            "-z",
             "--name-status",
             "--format=%x1e%H%x1f%h%x1f%an%x1f%at%x1f%s",
             "--",
@@ -228,51 +232,55 @@ pub fn file_history(
     )?;
 
     let mut entries: Vec<FileHistoryEntry> = Vec::new();
-    // 每个条目以 \x1e 开头：字段行 + name-status 行（\t 分列）。
+    // 每个条目以 \x1e 开头：字段行 + NUL 分列的 name-status 记录。
     for chunk in out.split('\x1e') {
         let chunk = chunk.trim_matches('\n');
         if chunk.is_empty() {
             continue;
         }
-        let mut lines = chunk.lines();
-        let Some(fields) = lines.next() else { continue };
+        // -z 下 format 行以 NUL 结尾（替代换行）：fields\0\n M\0<path>\0。
+        let (fields, status_part) = match chunk.split_once('\0') {
+            Some((f, r)) => (f, r.trim_matches('\n')),
+            None => (chunk, ""),
+        };
         let mut it = fields.split('\x1f');
-        let (Some(commit_id), Some(short_id), Some(author_name), Some(ts), Some(summary)) = (
-            it.next(),
-            it.next(),
-            it.next(),
-            it.next(),
-            it.next(),
-        ) else {
+        let (Some(commit_id), Some(short_id), Some(author_name), Some(ts), Some(summary)) =
+            (it.next(), it.next(), it.next(), it.next(), it.next())
+        else {
             continue;
         };
-        // name-status 行：M/A/D/T <path> 或 R100/Cxx <old> <new>。
-        let Some(status_line) = lines.find(|l| !l.trim().is_empty()) else {
+        // -z 记录：M\0<path>\0 或 R100\0<old>\0<new>\0（--follow 单路径下
+        // 每提交最多一条，多余 token 忽略）。
+        let tokens: Vec<&str> = status_part
+            .split('\0')
+            .filter(|t| !t.trim_matches('\n').is_empty())
+            .collect();
+        let Some(code) = tokens.first().copied() else {
             continue;
         };
-        let cols: Vec<&str> = status_line.split('\t').collect();
-        if cols.len() < 2 {
-            continue;
-        }
-        let code = cols[0];
-        let (change_type, entry_path, old_path) = if let Some(pct) =
-            code.strip_prefix('R').or_else(|| code.strip_prefix('C'))
+        let (change_type, entry_path, old_path) = if code.starts_with('R') || code.starts_with('C')
         {
-            let _ = pct;
-            // R/C：<old> <new>（--follow 单路径下每提交一条状态）
-            if cols.len() >= 3 {
-                (ChangeType::Renamed, cols[2].to_string(), Some(cols[1].to_string()))
+            // R/C：<old> <new>
+            if tokens.len() >= 3 {
+                (
+                    ChangeType::Renamed,
+                    tokens[2].to_string(),
+                    Some(tokens[1].to_string()),
+                )
             } else {
-                (ChangeType::Modified, cols[1].to_string(), None)
+                continue;
             }
         } else {
+            if tokens.len() < 2 {
+                continue;
+            }
             let ct = match code {
                 "A" => ChangeType::Added,
                 "D" => ChangeType::Deleted,
                 // T（类型变更）按修改处理
                 _ => ChangeType::Modified,
             };
-            (ct, cols[1].to_string(), None)
+            (ct, tokens[1].to_string(), None)
         };
         let timestamp = ts.parse::<i64>().unwrap_or(0);
         entries.push(FileHistoryEntry {

@@ -503,10 +503,7 @@ fn run_git_tolerant(
         .map_err(|e| AppError::Io(format!("等待 git 子进程失败: {e}")))?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    Ok((
-        output.status.success(),
-        normalize_output(&stdout, &stderr),
-    ))
+    Ok((output.status.success(), normalize_output(&stdout, &stderr)))
 }
 
 /// 当仓库/全局未配置 git 签名时，附加 `-c user.name=... -c user.email=...` 运行提交类命令。
@@ -868,6 +865,9 @@ pub fn abort_operation(repo: &git2::Repository, workdir: &Path) -> AppResult<Git
         }
     };
     let output = run_git(workdir, args)?;
+    // 中止成功 → 变基已结束，清理交互式变基的持久编辑器目录
+    //（含 merge/cherry-pick 等其他操作中止时顺带清掉历史残留，无则 no-op）。
+    cleanup_rebase_editor(repo);
     action_result(repo, output)
 }
 
@@ -1199,9 +1199,7 @@ pub fn stash_branch(
 ) -> AppResult<GitActionResult> {
     let name = name.trim();
     if name.is_empty() || name.chars().any(char::is_whitespace) {
-        return Err(AppError::InvalidArg(
-            "分支名不能包含空白字符".to_string(),
-        ));
+        return Err(AppError::InvalidArg("分支名不能包含空白字符".to_string()));
     }
     let stash_ref = format!("stash@{{{index}}}");
     let output = run_git(workdir, &["stash", "branch", name, &stash_ref])?;
@@ -1569,7 +1567,12 @@ pub fn checkout_file_from(
     crate::git_service::validate_rel_path(path)?;
     // 该提交删除了此文件（树中无此路径）→ 回退到第一父提交检出
     // （review 修复 #6：用户意图是"把文件从删除前的版本拿回来"）。
-    let target = if commit.tree().ok().and_then(|t| t.get_path(std::path::Path::new(path)).ok()).is_some() {
+    let target = if commit
+        .tree()
+        .ok()
+        .and_then(|t| t.get_path(std::path::Path::new(path)).ok())
+        .is_some()
+    {
         commit
     } else if commit.parent_count() > 0 {
         commit
@@ -2240,50 +2243,69 @@ mod tests {
         assert!(!manager.cancel("missing-repo"));
     }
 
-#[test]
-fn stash_branch_creates_checks_out_and_pops() {
-    let fx = setup_with_bare_remote();
-    let dir = fx.workdir();
-    commit_file(&fx.work, "base.txt", "v1\n", "base commit");
+    #[test]
+    fn stash_branch_creates_checks_out_and_pops() {
+        let fx = setup_with_bare_remote();
+        let dir = fx.workdir();
+        commit_file(&fx.work, "base.txt", "v1\n", "base commit");
 
-    // 贮藏一个修改 + 未跟踪文件
-    std::fs::write(dir.join("base.txt"), "v1\ndirty\n").unwrap();
-    std::fs::write(dir.join("new.txt"), "staged-in-stash\n").unwrap();
-    stash_push(&fx.work, &dir, Some("wip feature")).expect("stash_push 失败");
-    assert_eq!(std::fs::read_to_string(dir.join("base.txt")).unwrap(), "v1\n");
+        // 贮藏一个修改 + 未跟踪文件
+        std::fs::write(dir.join("base.txt"), "v1\ndirty\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "staged-in-stash\n").unwrap();
+        stash_push(&fx.work, &dir, Some("wip feature")).expect("stash_push 失败");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("base.txt")).unwrap(),
+            "v1\n"
+        );
 
-    // 从贮藏建分支：检出基准提交、应用贮藏、成功后弹出
-    let res = stash_branch(&fx.work, &dir, "feature/from-stash", 0).expect("stash_branch 失败");
-    assert_eq!(res.repo.head_branch.as_deref(), Some("feature/from-stash"));
-    assert!(dir.join("new.txt").exists());
-    assert!(std::fs::read_to_string(dir.join("base.txt")).unwrap().contains("dirty"));
-    assert!(list_stashes(&dir).unwrap().is_empty());
+        // 从贮藏建分支：检出基准提交、应用贮藏、成功后弹出
+        let res = stash_branch(&fx.work, &dir, "feature/from-stash", 0).expect("stash_branch 失败");
+        assert_eq!(res.repo.head_branch.as_deref(), Some("feature/from-stash"));
+        assert!(dir.join("new.txt").exists());
+        assert!(
+            std::fs::read_to_string(dir.join("base.txt"))
+                .unwrap()
+                .contains("dirty")
+        );
+        assert!(list_stashes(&dir).unwrap().is_empty());
 
-    // 非法分支名被拒绝
-    assert!(stash_branch(&fx.work, &dir, "bad name", 0).is_err());
-}
+        // 非法分支名被拒绝
+        assert!(stash_branch(&fx.work, &dir, "bad name", 0).is_err());
+    }
     #[test]
     fn interactive_rebase_reorders_and_drops_with_backup() {
         let mut fx = setup_with_bare_remote();
-            let dir = fx.workdir();
-            // 三条线性提交：c1 → c2 → c3
-            commit_file(&fx.work, "a.txt", "one\n", "feat: one");
-            commit_file(&fx.work, "b.txt", "two\n", "feat: two");
-            let c3 = commit_file(&fx.work, "c.txt", "three\n", "feat: three");
-            // 收集 c1/c2 的 id（HEAD~1 / HEAD~2）
-            let (c1, c2) = {
-                let head = fx.work.head().unwrap().peel_to_commit().unwrap();
-                (
-                    head.parent(0).unwrap().parent(0).unwrap().id().to_string(),
-                    head.parent(0).unwrap().id().to_string(),
-                )
-            };
+        let dir = fx.workdir();
+        // 三条线性提交：c1 → c2 → c3
+        commit_file(&fx.work, "a.txt", "one\n", "feat: one");
+        commit_file(&fx.work, "b.txt", "two\n", "feat: two");
+        let c3 = commit_file(&fx.work, "c.txt", "three\n", "feat: three");
+        // 收集 c1/c2 的 id（HEAD~1 / HEAD~2）
+        let (c1, c2) = {
+            let head = fx.work.head().unwrap().peel_to_commit().unwrap();
+            (
+                head.parent(0).unwrap().parent(0).unwrap().id().to_string(),
+                head.parent(0).unwrap().id().to_string(),
+            )
+        };
 
         // 计划：drop c2，重排为 c3 在前、c1 在后
         let plan = vec![
-            RebasePlanEntry { commit_id: c3.clone(), action: RebaseAction::Pick, message: None },
-            RebasePlanEntry { commit_id: c2, action: RebaseAction::Drop, message: None },
-            RebasePlanEntry { commit_id: c1, action: RebaseAction::Pick, message: None },
+            RebasePlanEntry {
+                commit_id: c3.clone(),
+                action: RebaseAction::Pick,
+                message: None,
+            },
+            RebasePlanEntry {
+                commit_id: c2,
+                action: RebaseAction::Drop,
+                message: None,
+            },
+            RebasePlanEntry {
+                commit_id: c1,
+                action: RebaseAction::Pick,
+                message: None,
+            },
         ];
         let res = interactive_rebase(&mut fx.work, &dir, &plan).expect("interactive_rebase 失败");
         assert_eq!(res.repo.state, RepoState::Clean);
@@ -2301,7 +2323,7 @@ fn stash_branch_creates_checks_out_and_pops() {
             v
         };
         // fixture 的 initial 提交之后：按新顺序 three → one（two 被丢弃）
-    assert_eq!(subjects, vec!["initial", "feat: three", "feat: one"]);
+        assert_eq!(subjects, vec!["initial", "feat: three", "feat: one"]);
         // 备份引用指向原 HEAD
         let backup = fx.work.find_reference(REBASE_BACKUP_REF).unwrap();
         assert_eq!(backup.target().unwrap().to_string(), c3);
@@ -2314,16 +2336,16 @@ fn stash_branch_creates_checks_out_and_pops() {
     #[test]
     fn interactive_rebase_reword_and_squash_custom_messages() {
         let mut fx = setup_with_bare_remote();
-            let dir = fx.workdir();
-            commit_file(&fx.work, "a.txt", "one\n", "feat: base");
-            commit_file(&fx.work, "a.txt", "one\ntwo\n", "wip: two");
-            let (c1, c2) = {
-                let head = fx.work.head().unwrap().peel_to_commit().unwrap();
-                (
-                    head.parent(0).unwrap().id().to_string(),
-                    head.id().to_string(),
-                )
-            };
+        let dir = fx.workdir();
+        commit_file(&fx.work, "a.txt", "one\n", "feat: base");
+        commit_file(&fx.work, "a.txt", "one\ntwo\n", "wip: two");
+        let (c1, c2) = {
+            let head = fx.work.head().unwrap().peel_to_commit().unwrap();
+            (
+                head.parent(0).unwrap().id().to_string(),
+                head.id().to_string(),
+            )
+        };
 
         // reword 第一条 + squash 第二条（自定义合并文案）
         let plan = vec![
@@ -2342,10 +2364,7 @@ fn stash_branch_creates_checks_out_and_pops() {
         assert_eq!(res.repo.state, RepoState::Clean);
         let new_head = fx.work.head().unwrap().peel_to_commit().unwrap();
         assert_eq!(new_head.parent_count(), 1); // squash 后仍单条新提交（含父）
-        assert_eq!(
-            new_head.message().unwrap().trim(),
-            "squashed: two changes"
-        );
+        assert_eq!(new_head.message().unwrap().trim(), "squashed: two changes");
         // 内容为两边叠加
         assert_eq!(
             std::fs::read_to_string(dir.join("a.txt")).unwrap(),
@@ -2356,18 +2375,18 @@ fn stash_branch_creates_checks_out_and_pops() {
     #[test]
     fn interactive_rebase_conflict_continue_and_abort_keep_backup() {
         let mut fx = setup_with_bare_remote();
-            let dir = fx.workdir();
-            // 两条提交都修改同一行 → 任意重排都会冲突
-            commit_file(&fx.work, "a.txt", "line v1\n", "change one");
-            commit_file(&fx.work, "a.txt", "line v2\n", "change two");
-            let (c1, c2, original_head) = {
-                let head = fx.work.head().unwrap().peel_to_commit().unwrap();
-                (
-                    head.parent(0).unwrap().id().to_string(),
-                    head.id().to_string(),
-                    head.id().to_string(),
-                )
-            };
+        let dir = fx.workdir();
+        // 两条提交都修改同一行 → 任意重排都会冲突
+        commit_file(&fx.work, "a.txt", "line v1\n", "change one");
+        commit_file(&fx.work, "a.txt", "line v2\n", "change two");
+        let (c1, c2, original_head) = {
+            let head = fx.work.head().unwrap().peel_to_commit().unwrap();
+            (
+                head.parent(0).unwrap().id().to_string(),
+                head.id().to_string(),
+                head.id().to_string(),
+            )
+        };
 
         // 重排（two 在前，one 在后）→ 第二条 pick 必然冲突；
         // 首条带 Reword：验证冲突暂停后自定义说明仍被写入（review 修复 #2）。
@@ -2377,7 +2396,11 @@ fn stash_branch_creates_checks_out_and_pops() {
                 action: RebaseAction::Reword,
                 message: Some("change two (reworded)".to_string()),
             },
-            RebasePlanEntry { commit_id: c1, action: RebaseAction::Pick, message: None },
+            RebasePlanEntry {
+                commit_id: c1,
+                action: RebaseAction::Pick,
+                message: None,
+            },
         ];
         let res = interactive_rebase(&mut fx.work, &dir, &plan).expect("冲突应返回 Ok 而非 Err");
         assert_eq!(res.repo.state, RepoState::Rebasing);
@@ -2390,7 +2413,11 @@ fn stash_branch_creates_checks_out_and_pops() {
                 break;
             }
             // 每轮写入不同内容，避免后续步骤变成空提交被 --empty 丢弃。
-            let resolved = if rounds % 2 == 0 { "line merged\n" } else { "line merged final\n" };
+            let resolved = if rounds % 2 == 0 {
+                "line merged\n"
+            } else {
+                "line merged final\n"
+            };
             std::fs::write(dir.join("a.txt"), resolved).unwrap();
             crate::git_service::stage_file(&mut fx.work, "a.txt").expect("暂存解决内容失败");
             // 多轮冲突下 continue 返回 Ok 且状态可能仍为 Rebasing（下一轮冲突）。
@@ -2426,18 +2453,44 @@ fn stash_branch_creates_checks_out_and_pops() {
             h.id().to_string()
         };
         commit_file(&fx.work, "a.txt", "line v3\n", "change three");
-        let c3 = fx.work.head().unwrap().peel_to_commit().unwrap().id().to_string();
+        let c3 = fx
+            .work
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string();
         // 重排（three 在前）→ 与继续后的提交（同改 a.txt）冲突
         let plan2 = vec![
-            RebasePlanEntry { commit_id: c3.clone(), action: RebaseAction::Pick, message: None },
-            RebasePlanEntry { commit_id: post_continue_head, action: RebaseAction::Pick, message: None },
+            RebasePlanEntry {
+                commit_id: c3.clone(),
+                action: RebaseAction::Pick,
+                message: None,
+            },
+            RebasePlanEntry {
+                commit_id: post_continue_head,
+                action: RebaseAction::Pick,
+                message: None,
+            },
         ];
         let res2 = interactive_rebase(&mut fx.work, &dir, &plan2).expect("第二次冲突应返回 Ok");
         assert_eq!(res2.repo.state, RepoState::Rebasing);
         let aborted = abort_operation(&fx.work, &dir).expect("rebase --abort 失败");
         assert_eq!(aborted.repo.state, RepoState::Clean);
+        // 中止后应清理持久编辑器目录，避免残留脚本被后续「继续」误用。
+        assert!(
+            !fx.work.path().join("opl-rebase-editor").exists(),
+            "中止后 opl-rebase-editor 应被清理"
+        );
         assert_eq!(
-            fx.work.head().unwrap().peel_to_commit().unwrap().id().to_string(),
+            fx.work
+                .head()
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+                .to_string(),
             c3
         );
         assert_eq!(
@@ -2459,7 +2512,10 @@ fn stash_branch_creates_checks_out_and_pops() {
         let res = checkout_file_from(&fx.work, &dir, &old, "a.txt").expect("恢复失败");
         assert_eq!(res.repo.state, RepoState::Clean);
         // 工作区恢复到 old 版本
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v1\nv2\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "v1\nv2\n"
+        );
         // 已直接进入暂存区（git checkout <commit> -- path 的语义）
         let statuses = git_service::status(&fx.work).unwrap();
         let entry = statuses.iter().find(|s| s.path == "a.txt").unwrap();
@@ -2481,13 +2537,30 @@ fn stash_branch_creates_checks_out_and_pops() {
             let mut index = fx.work.index().unwrap();
             index.remove_path(std::path::Path::new("a.txt")).unwrap();
             index.write().unwrap();
-            let tree = fx.work.find_tree(index.write_tree_to(&fx.work).unwrap()).unwrap();
+            let tree = fx
+                .work
+                .find_tree(index.write_tree_to(&fx.work).unwrap())
+                .unwrap();
             let head = fx.work.head().unwrap().peel_to_commit().unwrap();
             fx.work
-                .commit(Some("HEAD"), &sig(), &sig(), "delete a.txt", &tree, &[&head])
+                .commit(
+                    Some("HEAD"),
+                    &sig(),
+                    &sig(),
+                    "delete a.txt",
+                    &tree,
+                    &[&head],
+                )
                 .unwrap();
         }
-        let del_id = fx.work.head().unwrap().peel_to_commit().unwrap().id().to_string();
+        let del_id = fx
+            .work
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string();
         let _ = del;
 
         // 在删除提交上恢复 a.txt：应回退到父提交检出，文件失而复得

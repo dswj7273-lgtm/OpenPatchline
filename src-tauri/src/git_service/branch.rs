@@ -221,8 +221,7 @@ pub fn branches_containing(repo: &git2::Repository, commit_id: &str) -> AppResul
             .branches(Some(ty))
             .map_err(|e| AppError::Git(format!("枚举分支失败: {e}")))?;
         for branch in branches {
-            let (branch, _) = branch
-                .map_err(|e| AppError::Git(format!("枚举分支失败: {e}")))?;
+            let (branch, _) = branch.map_err(|e| AppError::Git(format!("枚举分支失败: {e}")))?;
             let tip = match branch.get().peel_to_commit() {
                 Ok(c) => c,
                 Err(_) => continue,
@@ -232,9 +231,7 @@ pub fn branches_containing(repo: &git2::Repository, commit_id: &str) -> AppResul
                 || repo
                     .merge_base(tip.id(), target)
                     .is_ok_and(|base| base == target);
-            if contains
-                && let Some(name) = branch.name().ok().flatten()
-            {
+            if contains && let Some(name) = branch.name().ok().flatten() {
                 names.push(name.to_string());
             }
         }

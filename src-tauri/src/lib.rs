@@ -15,8 +15,8 @@
 pub mod app_config;
 pub mod commands;
 pub mod diff_engine;
-pub mod external;
 pub mod error;
+pub mod external;
 pub mod git_remote;
 pub mod git_service;
 pub mod graph;
@@ -30,12 +30,16 @@ pub mod watcher;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use tauri::Emitter;
-    use tauri::{Manager, menu::{MenuBuilder, MenuItem, SubmenuBuilder}};
+    use tauri::{
+        Manager,
+        menu::{MenuBuilder, MenuItem, SubmenuBuilder},
+    };
 
     fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         // 菜单项 id 与前端 keymap 注册表（src/keyboard/keymap.ts）对齐，
         // 事件统一以 `app_menu_action` 推送、由 runAppAction 路由。
-        let open_repo = MenuItem::with_id(app, "open-repo", "打开仓库…", true, Some("CmdOrCtrl+O"))?;
+        let open_repo =
+            MenuItem::with_id(app, "open-repo", "打开仓库…", true, Some("CmdOrCtrl+O"))?;
         let refresh = MenuItem::with_id(app, "refresh", "刷新", true, Some("CmdOrCtrl+R"))?;
         let file_menu = SubmenuBuilder::new(app, "文件")
             .item(&open_repo)
@@ -54,8 +58,13 @@ pub fn run() {
             .select_all()
             .build()?;
 
-        let palette =
-            MenuItem::with_id(app, "command-palette", "命令面板…", true, Some("CmdOrCtrl+K"))?;
+        let palette = MenuItem::with_id(
+            app,
+            "command-palette",
+            "命令面板…",
+            true,
+            Some("CmdOrCtrl+K"),
+        )?;
         let search = MenuItem::with_id(app, "search", "搜索提交", true, Some("CmdOrCtrl+F"))?;
         let theme = MenuItem::with_id(
             app,
