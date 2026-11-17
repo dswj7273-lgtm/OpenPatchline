@@ -27,5 +27,6 @@ dist-ssr
 src-tauri/target/
 src-tauri/gen/
 
-# Local Word documents
+# Local Word documents and design docs
 *.docx
+docs/
