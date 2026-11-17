@@ -33,24 +33,24 @@ const DEBOUNCE: Duration = Duration::from_millis(500);
 /// CHERRY_PICK_HEAD / REVERT_HEAD / REBASE_HEAD / rebase-*；
 /// 排除 objects/ 写入与 `*.lock` 锁文件（fetch/commit 期间的高频噪音）。
 fn is_relevant(path: &Path) -> bool {
-    let s = path.to_string_lossy();
-    if s.ends_with(".lock") {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    if normalized.ends_with(".lock") {
         return false;
     }
-    if s.contains("/objects/") {
+    if normalized.contains("/objects/") {
         return false;
     }
-    s.contains("/refs/")
-        || s.ends_with("/HEAD")
-        || s.ends_with("/index")
-        || s.contains("packed-refs")
-        || s.ends_with("MERGE_HEAD")
-        || s.ends_with("FETCH_HEAD")
-        || s.ends_with("CHERRY_PICK_HEAD")
-        || s.ends_with("REVERT_HEAD")
-        || s.ends_with("REBASE_HEAD")
-        || s.contains("rebase-merge")
-        || s.contains("rebase-apply")
+    normalized.contains("/refs/")
+        || normalized.ends_with("/HEAD")
+        || normalized.ends_with("/index")
+        || normalized.ends_with("/packed-refs")
+        || normalized.ends_with("/MERGE_HEAD")
+        || normalized.ends_with("/FETCH_HEAD")
+        || normalized.ends_with("/CHERRY_PICK_HEAD")
+        || normalized.ends_with("/REVERT_HEAD")
+        || normalized.ends_with("/REBASE_HEAD")
+        || normalized.contains("/rebase-merge")
+        || normalized.contains("/rebase-apply")
 }
 
 /// 防抖循环：收到首个消息后持续吸收，静默 [`DEBOUNCE`] 无新消息时把
@@ -153,6 +153,13 @@ mod tests {
         assert!(!is_relevant(Path::new("/repo/.git/objects/ab/cdef")));
         assert!(!is_relevant(Path::new("/repo/.git/index.lock")));
         assert!(!is_relevant(Path::new("/repo/.git/refs/heads/main.lock")));
+        // Windows 反斜杠路径同样兼容。
+        assert!(is_relevant(Path::new(r"C:\repo\.git\refs\heads\main")));
+        assert!(is_relevant(Path::new(r"C:\repo\.git\HEAD")));
+        assert!(is_relevant(Path::new(r"C:\repo\.git\index")));
+        assert!(is_relevant(Path::new(r"C:\repo\.git\CHERRY_PICK_HEAD")));
+        assert!(!is_relevant(Path::new(r"C:\repo\.git\objects\ab\cdef")));
+        assert!(!is_relevant(Path::new(r"C:\repo\.git\index.lock")));
     }
 
     /// 防抖：一次风暴内的多条消息合并为一轮通知；两个 repo_id 都送达。

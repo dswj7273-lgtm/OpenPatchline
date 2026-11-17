@@ -169,6 +169,12 @@ pub async fn remove_recent_repository(
 /// - `filter`：分支起点 / 作者 / message / 时间过滤。
 ///
 /// `next_cursor` 为最后一行 commit id（`has_more` 为 false 时为 None）。
+fn parse_graph_cursor(raw: &str) -> Option<(u64, &str)> {
+    let (gen_str, oid) = raw.split_once(':')?;
+    let generation = gen_str.parse::<u64>().ok()?;
+    Some((generation, oid))
+}
+
 #[tauri::command]
 pub async fn get_commit_graph(
     state: State<'_, RepoManager>,
@@ -179,17 +185,38 @@ pub async fn get_commit_graph(
 ) -> AppResult<GraphPage> {
     let entry = state.inner().clone().entry(&repo_id)?;
     let limit = limit.unwrap_or(DEFAULT_GRAPH_PAGE_SIZE).max(1);
-    let fresh_page = cursor.is_none();
     tauri::async_runtime::spawn_blocking(move || -> AppResult<GraphPage> {
         let mut entry = lock_entry(&entry);
-        if fresh_page {
+        let raw_cursor = match cursor.as_deref() {
+            None => None,
+            Some(c) => {
+                if let Some((generation, oid)) = parse_graph_cursor(c) {
+                    if generation != entry.graph_generation {
+                        return Err(AppError::InvalidArg(
+                            "提交图分页会话已过期，请刷新提交列表".to_string(),
+                        ));
+                    }
+                    Some(oid.to_string())
+                } else {
+                    Some(c.to_string())
+                }
+            }
+        };
+        let (commits, has_more) = git_service::load_commit_page(
+            &entry.repo,
+            raw_cursor.as_deref(),
+            limit,
+            filter.as_ref(),
+        )?;
+        if cursor.is_none() {
             entry.graph_state = graph::GraphState::new();
+            entry.graph_generation = entry.graph_generation.wrapping_add(1);
         }
-        let (commits, has_more) =
-            git_service::load_commit_page(&entry.repo, cursor.as_deref(), limit, filter.as_ref())?;
+        let generation = entry.graph_generation;
         let rows = entry.graph_state.compute_graph_rows(commits);
         let next_cursor = if has_more {
-            rows.last().map(|row| row.commit.id.clone())
+            rows.last()
+                .map(|row| format!("{generation}:{}", row.commit.id))
         } else {
             None
         };
@@ -252,9 +279,7 @@ pub async fn get_file_diff(
     scope: DiffScope,
     path: String,
 ) -> AppResult<FileDiffResult> {
-    if path.is_empty() {
-        return Err(AppError::InvalidArg("path 不能为空".to_string()));
-    }
+    git_service::validate_rel_path(&path)?;
     // commit / range 范围必须提供对应引用（提前校验，避免后台任务白跑）。
     if matches!(scope.kind, DiffScopeKind::Commit)
         && scope.commit_id.as_deref().is_none_or(str::is_empty)
@@ -310,9 +335,7 @@ pub async fn apply_diff_selection(
     action: DiffPatchAction,
     selections: Vec<DiffLineSelection>,
 ) -> AppResult<()> {
-    if path.is_empty() {
-        return Err(AppError::InvalidArg("path 不能为空".to_string()));
-    }
+    git_service::validate_rel_path(&path)?;
     if selections.is_empty() {
         return Err(AppError::InvalidArg("选区不能为空".to_string()));
     }
@@ -347,9 +370,7 @@ pub async fn stage_file(
     repo_id: String,
     path: String,
 ) -> AppResult<()> {
-    if path.is_empty() {
-        return Err(AppError::InvalidArg("path 不能为空".to_string()));
-    }
+    git_service::validate_rel_path(&path)?;
     let entry = state.inner().clone().entry(&repo_id)?;
     tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
         let mut entry = lock_entry(&entry);
@@ -366,9 +387,7 @@ pub async fn unstage_file(
     repo_id: String,
     path: String,
 ) -> AppResult<()> {
-    if path.is_empty() {
-        return Err(AppError::InvalidArg("path 不能为空".to_string()));
-    }
+    git_service::validate_rel_path(&path)?;
     let entry = state.inner().clone().entry(&repo_id)?;
     tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
         let mut entry = lock_entry(&entry);

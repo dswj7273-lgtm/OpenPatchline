@@ -14,13 +14,24 @@ const FALLBACK_SIGNATURE_EMAIL: &str = "openpatchline@local";
 /// 读取 commit.template 模板的最大字节数（64KB）。
 const MAX_TEMPLATE_BYTES: usize = 64 * 1024;
 
+fn ensure_committable_state(repo: &git2::Repository) -> AppResult<()> {
+    match repo_state(repo) {
+        RepoState::Rebasing => Err(AppError::InvalidArg(
+            "正在进行 Rebase，请解决冲突并暂存后使用「继续」完成变基".to_string(),
+        )),
+        RepoState::CherryPicking => Err(AppError::InvalidArg(
+            "正在进行 Cherry-pick，请解决冲突并暂存后使用「继续」完成拣选".to_string(),
+        )),
+        RepoState::Reverting => Err(AppError::InvalidArg(
+            "正在进行 Revert，请解决冲突并暂存后使用「继续」完成回退".to_string(),
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// 将当前 index 内容创建为一个提交，返回新提交 id（沿用仓库签名配置或无签名提交）。
 pub fn create_commit(repo: &mut git2::Repository, message: &str) -> AppResult<String> {
-    if repo_state(repo) == RepoState::Rebasing {
-        return Err(AppError::InvalidArg(
-            "正在进行 Rebase，请解决冲突并暂存后使用「继续」完成变基".to_string(),
-        ));
-    }
+    ensure_committable_state(repo)?;
     let signature = commit_signature(repo)?;
     let mut index = fresh_index(repo)?;
     if index.has_conflicts() {
@@ -66,10 +77,8 @@ pub fn create_commit(repo: &mut git2::Repository, message: &str) -> AppResult<St
         )
         .map_err(|e| AppError::Git(format!("创建提交失败: {e}")))?;
 
-    for refname in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"] {
-        if let Ok(mut reference) = repo.find_reference(refname) {
-            let _ = reference.delete();
-        }
+    if let Ok(mut reference) = repo.find_reference("MERGE_HEAD") {
+        let _ = reference.delete();
     }
     let gitdir = repo.path();
     for file in ["MERGE_MSG", "MERGE_MODE", "AUTO_MERGE"] {
@@ -96,11 +105,7 @@ pub fn create_commit_with_options(
         return create_commit(repo, message);
     }
 
-    if repo_state(repo) == RepoState::Rebasing {
-        return Err(AppError::InvalidArg(
-            "正在进行 Rebase，请解决冲突并暂存后使用「继续」完成变基".to_string(),
-        ));
-    }
+    ensure_committable_state(repo)?;
     let index = fresh_index(repo)?;
     if index.has_conflicts() {
         return Err(AppError::Git(
@@ -159,10 +164,14 @@ pub fn commit_metadata(repo: &git2::Repository) -> AppResult<CommitMetadata> {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "openpgp".to_string());
 
-    let commit_template = cfg
-        .get_string("commit.template")
-        .ok()
-        .and_then(|raw| read_commit_template(repo.workdir(), &raw));
+    let commit_template = cfg.get_entry("commit.template").ok().and_then(|entry| {
+        let enforce_boundary = matches!(
+            entry.level(),
+            git2::ConfigLevel::Local | git2::ConfigLevel::Worktree
+        );
+        let raw = cfg.get_string("commit.template").ok()?;
+        read_commit_template(repo.workdir(), &raw, enforce_boundary)
+    });
 
     Ok(CommitMetadata {
         commit_template,
@@ -267,12 +276,23 @@ fn read_gpgsign_config(repo: &git2::Repository) -> bool {
         .unwrap_or(false)
 }
 
-fn read_commit_template(workdir: Option<&Path>, raw_path: &str) -> Option<String> {
+fn read_commit_template(
+    workdir: Option<&Path>,
+    raw_path: &str,
+    enforce_workdir_boundary: bool,
+) -> Option<String> {
     let trimmed = raw_path.trim();
     if trimmed.is_empty() {
         return None;
     }
     let resolved = resolve_template_path(workdir, trimmed)?;
+    if enforce_workdir_boundary {
+        let canon_root = std::fs::canonicalize(workdir?).ok()?;
+        let canon_tpl = std::fs::canonicalize(&resolved).ok()?;
+        if !canon_tpl.starts_with(&canon_root) {
+            return None;
+        }
+    }
     let bytes = std::fs::read(resolved).ok()?;
     if bytes.is_empty() || bytes.len() > MAX_TEMPLATE_BYTES {
         return None;

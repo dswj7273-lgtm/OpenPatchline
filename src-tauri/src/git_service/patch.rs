@@ -12,7 +12,9 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use super::diff::{blob_bytes_from_index, blob_bytes_from_tree, find_delta, find_similar};
-use super::{fresh_index, head_tree, path_str, validate_rel_path};
+use super::{
+    fresh_index, head_tree, path_str, read_workdir_file, resolve_workdir_path, validate_rel_path,
+};
 use crate::diff_engine::{self, DiffOptions as TextDiffOptions};
 use crate::error::{AppError, AppResult};
 use crate::git_remote::run_git_with_input;
@@ -179,11 +181,7 @@ fn load_scope_pair(
                 None => blob_bytes_from_tree(repo, head_tree.as_ref(), old_lookup)?,
             };
             let new_lookup = new_path.as_deref().unwrap_or(path);
-            let new_bytes = match std::fs::read(workdir.join(new_lookup)) {
-                Ok(b) => Some(b),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                Err(e) => return Err(AppError::Io(format!("读取工作区文件 {path} 失败: {e}"))),
-            };
+            let new_bytes = read_workdir_file(workdir, new_lookup)?;
             Ok(LoadedScopePair {
                 old_bytes,
                 new_bytes,
@@ -498,8 +496,8 @@ fn apply_discard_patch(
         .or(loaded.old_path.as_deref())
         .unwrap_or(path);
     if target_bytes.is_none() && loaded.old_bytes.is_none() {
-        let full = workdir.join(disk_path);
-        if full.exists() {
+        let full = resolve_workdir_path(workdir, disk_path)?;
+        if std::fs::symlink_metadata(&full).is_ok() {
             std::fs::remove_file(&full)
                 .map_err(|e| AppError::Io(format!("删除未跟踪文件 {disk_path} 失败: {e}")))?;
         }

@@ -582,13 +582,7 @@ export default function App() {
     let unlistenProgress: (() => void) | undefined;
     let cancelled = false;
     void listen<string>("repo_status_changed", (event) => {
-      const state = useAppStore.getState();
-      if (!state.repo || event.payload !== state.repo.id) return;
-      if (state.gitBusy !== null) return;
-      void state.refreshRepoInfo();
-      void state.loadFileStatus();
-      void state.reloadGraph();
-      void state.loadBranches();
+      useAppStore.getState().handleRepoStatusChanged(event.payload);
     }).then((fn) => {
       if (cancelled) fn();
       else unlistenStatus = fn;

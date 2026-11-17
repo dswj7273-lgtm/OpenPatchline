@@ -76,12 +76,20 @@ export function CommitComposer() {
   }, [graphRows]);
 
   const hasConflicts = conflicted.length > 0;
-  const isRebasing = repo?.state === "rebasing";
+  const inProgressOpLabel =
+    repo?.state === "rebasing"
+      ? "变基"
+      : repo?.state === "cherryPicking"
+        ? "Cherry-pick"
+        : repo?.state === "reverting"
+          ? "Revert"
+          : null;
+  const hasInProgressOp = inProgressOpLabel !== null;
   const canSubmit =
     !busy &&
     gitBusy === null &&
     !hasConflicts &&
-    !isRebasing &&
+    !hasInProgressOp &&
     Boolean(message.trim()) &&
     (amend ? Boolean(repo?.headCommit) : staged.length > 0);
 
@@ -304,7 +312,7 @@ export function CommitComposer() {
             <input
               type="checkbox"
               checked={amend}
-              disabled={busy || hasConflicts || isRebasing || !repo?.headCommit}
+              disabled={busy || hasConflicts || hasInProgressOp || !repo?.headCommit}
               onChange={(e) => toggleAmend(e.target.checked)}
             />
             <span>Amend</span>
@@ -324,7 +332,7 @@ export function CommitComposer() {
               <input
                 type="checkbox"
                 checked={effectiveSign}
-                disabled={busy || hasConflicts || isRebasing}
+                disabled={busy || hasConflicts || hasInProgressOp}
                 onChange={(e) => setSignOverride(e.target.checked)}
               />
               <ShieldCheckIcon />
@@ -333,11 +341,11 @@ export function CommitComposer() {
           )}
         </div>
 
-        {(hasConflicts || isRebasing) && (
+        {(hasConflicts || hasInProgressOp) && (
           <p className="sidebar-commit-hint" role="status">
             {hasConflicts
               ? `存在 ${conflicted.length} 个冲突文件，解决并标记后方可继续`
-              : "变基中，请在顶部横幅点击「继续」完成变基"}
+              : `${inProgressOpLabel} 进行中，请在顶部横幅点击「继续」完成操作`}
           </p>
         )}
 

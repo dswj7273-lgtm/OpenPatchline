@@ -91,7 +91,7 @@ fn commit_page_pagination() {
     assert_eq!(ids2, vec![c1.as_str()]);
 }
 
-/// (2) 提交上的引用标签包含 Head 与 Local（分支名一致）。
+/// (2) 提交上的引用标签包含 Head（且当前分支不再重复挂载同名的 Local 标签）。
 #[test]
 fn refs_labels_contain_head_and_branch() {
     let (_dir, repo) = init_repo();
@@ -111,9 +111,10 @@ fn refs_labels_contain_head_and_branch() {
             .any(|l| l.name == branch_name && matches!(l.kind, RefKind::Head))
     );
     assert!(
-        labels
+        !labels
             .iter()
-            .any(|l| l.name == branch_name && matches!(l.kind, RefKind::Local))
+            .any(|l| l.name == branch_name && matches!(l.kind, RefKind::Local)),
+        "当前 HEAD 指向的分支不应同时展示 Head 与 Local 两个同名徽章"
     );
 }
 
@@ -1382,4 +1383,146 @@ fn lightweight_rebase_reword_squash_and_guards() {
     assert_eq!(head_commit.author().name().ok(), Some("Test User"));
     assert_eq!(head_commit.parent_id(0).unwrap().to_string(), base);
     assert_eq!(repo.head().unwrap().target().unwrap(), head_commit.id());
+}
+
+#[test]
+fn diff_and_stage_reject_path_traversal_and_symlinks() {
+    let (_dir, mut repo) = init_repo();
+    let outside = tempfile::tempdir().expect("创建外部目录失败");
+    let secret = outside.path().join("secret.txt");
+    std::fs::write(&secret, "TOP_SECRET_VALUE\n").unwrap();
+
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+
+    // 1) 非法路径 / 越界相对路径一律拦截
+    for bad in ["../secret.txt", "/etc/passwd", ".", ""] {
+        assert!(
+            matches!(file_diff_workdir(&repo, bad), Err(AppError::InvalidArg(_))),
+            "file_diff_workdir 应拦截 {bad}"
+        );
+        assert!(
+            matches!(stage_file(&mut repo, bad), Err(AppError::InvalidArg(_))),
+            "stage_file 应拦截 {bad}"
+        );
+        assert!(
+            matches!(unstage_file(&mut repo, bad), Err(AppError::InvalidArg(_))),
+            "unstage_file 应拦截 {bad}"
+        );
+    }
+
+    // 2) 未变更的未跟踪目录或不存在的文件不再回退去任意读取工作区磁盘
+    assert!(matches!(
+        file_diff_workdir(&repo, "nonexistent.txt"),
+        Err(AppError::NotFound(_))
+    ));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let workdir = repo.workdir().unwrap().to_path_buf();
+        // 目录符号链接指向仓库外：访问 escape_dir/secret.txt 必须被拦截
+        symlink(outside.path(), workdir.join("escape_dir")).unwrap();
+        assert!(matches!(
+            file_diff_workdir(&repo, "escape_dir/secret.txt"),
+            Err(AppError::InvalidArg(_))
+        ));
+        assert!(matches!(
+            stage_file(&mut repo, "escape_dir/secret.txt"),
+            Err(AppError::InvalidArg(_))
+        ));
+
+        // 文件符号链接指向仓库外：读取工作区 diff 仅呈现符号链接目标字符串，绝不解引用外部文件内容
+        symlink(&secret, workdir.join("leak.link")).unwrap();
+        let link_diff =
+            file_diff_workdir(&repo, "leak.link").expect("符号链接 diff 应仅读 link target");
+        let joined: String = link_diff
+            .rows
+            .iter()
+            .filter_map(|r| r.right.as_ref())
+            .map(|c| c.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !joined.contains("TOP_SECRET_VALUE"),
+            "绝不能解引用读取仓库外符号链接目标文件内容"
+        );
+        assert!(joined.contains(&secret.to_string_lossy().to_string()));
+    }
+}
+
+#[test]
+fn commit_metadata_rejects_local_config_template_outside_workdir() {
+    let (_dir, repo) = init_repo();
+    let outside = tempfile::tempdir().expect("创建外部目录失败");
+    let secret_tpl = outside.path().join("outside_tpl.txt");
+    std::fs::write(&secret_tpl, "EXTERNAL_SECRET_TEMPLATE\n").unwrap();
+
+    // 仓库本地 .git/config 指向工作区外文件 → 必须被拦截忽略
+    let mut cfg = repo.config().unwrap();
+    cfg.set_str("commit.template", secret_tpl.to_str().unwrap())
+        .unwrap();
+    drop(cfg);
+    let meta = commit_metadata(&repo).expect("读取 commit_metadata 失败");
+    assert_eq!(meta.commit_template, None);
+
+    // 指向工作区内合法模板文件 → 正常加载
+    std::fs::write(
+        repo.workdir().unwrap().join(".gitmessage"),
+        "feat: tpl\n# comment\n",
+    )
+    .unwrap();
+    let mut cfg2 = repo.config().unwrap();
+    cfg2.set_str("commit.template", ".gitmessage").unwrap();
+    drop(cfg2);
+    let meta2 = commit_metadata(&repo).expect("读取合法模板失败");
+    assert_eq!(meta2.commit_template.as_deref(), Some("feat: tpl"));
+}
+
+#[test]
+fn checkout_remote_rejects_diverged_local_branch() {
+    let (_dir, mut repo) = init_repo();
+    let c1 = commit_file(&repo, "a.txt", "v1\n", "initial");
+    {
+        let commit1 = repo.find_commit(git2::Oid::from_str(&c1).unwrap()).unwrap();
+        repo.branch("feat", &commit1, false).unwrap();
+    }
+    let c2 = make_orphan_commit(&repo, "a.txt", "remote\n");
+    create_remote_ref(&repo, "feat", &c2);
+
+    // 本地已存在 feat 且与 origin/feat 提交/上游不一致 → 不得静默切错分支
+    let res = checkout_branch(&mut repo, "origin/feat");
+    assert!(matches!(res, Err(AppError::InvalidArg(_))));
+    assert_ne!(
+        repo.head().unwrap().shorthand().ok(),
+        Some("feat"),
+        "拒绝后不应静默切到过时的本地分支 feat"
+    );
+}
+
+#[test]
+fn create_commit_blocked_during_cherry_pick_and_revert() {
+    let (dir, mut repo) = init_repo();
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+    std::fs::write(
+        repo.path().join("CHERRY_PICK_HEAD"),
+        "0000000000000000000000000000000000000000\n",
+    )
+    .unwrap();
+    assert_eq!(repo_state(&repo), RepoState::CherryPicking);
+    assert!(matches!(
+        create_commit(&mut repo, "manual commit"),
+        Err(AppError::InvalidArg(_))
+    ));
+    let _ = std::fs::remove_file(dir.path().join(".git/CHERRY_PICK_HEAD"));
+
+    std::fs::write(
+        repo.path().join("REVERT_HEAD"),
+        "0000000000000000000000000000000000000000\n",
+    )
+    .unwrap();
+    assert_eq!(repo_state(&repo), RepoState::Reverting);
+    assert!(matches!(
+        create_commit_with_options(&mut repo, "manual commit", Some(false)),
+        Err(AppError::InvalidArg(_))
+    ));
 }

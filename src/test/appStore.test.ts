@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../api/client";
 import { createAppStore } from "../store/app";
-import type { ChangedFile, FileDiffResult, RepoInfo } from "../types";
+import type { ChangedFile, FetchResult, FileDiffResult, GraphPage, RepoInfo } from "../types";
 
 vi.mock("../api/client", () => ({
   openRepository: vi.fn(),
@@ -273,5 +273,132 @@ describe("useAppStore slices", () => {
       [{ rowIndex: 0, side: "new" }],
     );
     expect(store.getState().activeView).toBe("log");
+  });
+
+  it("ignores stale concurrent responses across reloadGraph, loadMoreCommits, showDiffFile, and fileStatus", async () => {
+    const store = createAppStore();
+    mockedApi.openRepository.mockResolvedValueOnce({ kind: "opened", repo: baseRepo });
+    await store.getState().openRepo("/tmp/demo");
+
+    // 1) reloadGraph 并发竞争：先发慢请求 A 后发快请求 B，慢结果不得覆盖快结果
+    let resolveFirstGraph!: (val: GraphPage) => void;
+    mockedApi.getCommitGraph.mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolveFirstGraph = res;
+        }),
+    );
+    const secondPage: GraphPage = {
+      rows: [
+        {
+          commit: {
+            id: "2222222",
+            shortId: "2222222",
+            message: "new commit",
+            authorName: "Dev",
+            authorEmail: "dev@example.com",
+            timestamp: 100,
+            parentIds: [],
+            refs: [],
+            lane: 0,
+            laneColor: 0,
+          },
+          laneIndex: 0,
+          laneCount: 1,
+          colorIndex: 0,
+          connectionsAbove: [],
+          connectionsBelow: [],
+        },
+      ],
+      nextCursor: null,
+      hasMore: false,
+    };
+    mockedApi.getCommitGraph.mockResolvedValueOnce(secondPage);
+
+    const p1 = store.getState().reloadGraph();
+    const p2 = store.getState().reloadGraph();
+    await p2;
+    expect(store.getState().graphRows.map((r) => r.commit.id)).toEqual(["2222222"]);
+
+    resolveFirstGraph({ rows: [], nextCursor: "stale-cursor", hasMore: true });
+    await p1;
+    expect(store.getState().graphRows.map((r) => r.commit.id)).toEqual(["2222222"]);
+    expect(store.getState().nextCursor).toBeNull();
+
+    // 2) showDiffFile 并发切文件：旧请求后返回不得覆盖当前选中文件 diff
+    const files: ChangedFile[] = [
+      { path: "first.ts", oldPath: null, changeType: "modified", additions: 1, deletions: 0 },
+      { path: "second.ts", oldPath: null, changeType: "modified", additions: 1, deletions: 0 },
+    ];
+    let resolveFirstDiff!: (val: FileDiffResult) => void;
+    mockedApi.getFileDiff.mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolveFirstDiff = res;
+        }),
+    );
+    mockedApi.getFileDiff.mockResolvedValueOnce({
+      oldPath: "second.ts",
+      newPath: "second.ts",
+      changeType: "modified",
+      isBinary: false,
+      tooLarge: false,
+      rows: [],
+      changeRowIndices: [],
+      additions: 1,
+      deletions: 0,
+    });
+    const d1 = store.getState().openFileDiff({ kind: "workdir" }, files, 0);
+    const d2 = store.getState().showDiffFile(1);
+    await d2;
+    expect(store.getState().currentFileDiff?.newPath).toBe("second.ts");
+
+    resolveFirstDiff({
+      oldPath: "first.ts",
+      newPath: "first.ts",
+      changeType: "modified",
+      isBinary: false,
+      tooLarge: false,
+      rows: [],
+      changeRowIndices: [],
+      additions: 1,
+      deletions: 0,
+    });
+    await d1;
+    expect(store.getState().currentFileDiff?.newPath).toBe("second.ts");
+  });
+
+  it("coalesces repo_status_changed received during gitBusy and flushes after release", async () => {
+    const store = createAppStore();
+    mockedApi.openRepository.mockResolvedValueOnce({ kind: "opened", repo: baseRepo });
+    await store.getState().openRepo("/tmp/demo");
+    vi.clearAllMocks();
+
+    let resolveFetch!: (val: FetchResult) => void;
+    mockedApi.fetchRepository.mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolveFetch = res;
+        }),
+    );
+    mockedApi.getRepoInfo.mockResolvedValue({ ...baseRepo, headCommit: "9999999" });
+
+    const fetchPromise = store.getState().fetchRemote();
+    expect(store.getState().gitBusy).toBe("fetch");
+
+    // gitBusy 期间收到 watcher 事件不应被直接丢弃
+    store.getState().handleRepoStatusChanged("/tmp/demo");
+    expect(store.getState().pendingRepoRefresh).toBe("/tmp/demo");
+
+    resolveFetch({ remote: "origin", output: "ok" });
+    await fetchPromise;
+
+    expect(store.getState().gitBusy).toBeNull();
+    expect(store.getState().pendingRepoRefresh).toBeNull();
+    // fetchRemote 自身只刷新 branches+graph；积压的 watcher 补刷应触发完整刷新（含 repoInfo 与 fileStatus）
+    expect(mockedApi.getRepoInfo).toHaveBeenCalledTimes(1);
+    expect(mockedApi.getFileStatus).toHaveBeenCalledTimes(1);
+    expect(mockedApi.getCommitGraph).toHaveBeenCalledTimes(2);
+    expect(mockedApi.listBranches).toHaveBeenCalledTimes(2);
   });
 });

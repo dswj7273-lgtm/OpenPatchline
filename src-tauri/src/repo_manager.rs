@@ -22,6 +22,8 @@ pub struct RepoEntry {
     pub repo: git2::Repository,
     /// 该仓库的泳道布局增量状态（跨分页持久，见 graph 模块）。
     pub graph_state: graph::GraphState,
+    /// 图分页会话代数：每次首页重置后递增，防止旧分页游标复用新布局状态。
+    pub graph_generation: u64,
 }
 
 /// 已打开仓库表：`repo_id` → 条目共享句柄。
@@ -94,6 +96,7 @@ impl RepoManager {
         let entry = RepoEntry {
             repo,
             graph_state: graph::GraphState::new(),
+            graph_generation: 0,
         };
         let info = git_service::repo_info(&entry.repo)?;
         self.lock_table().insert(id, Arc::new(Mutex::new(entry)));

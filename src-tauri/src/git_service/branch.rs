@@ -97,10 +97,25 @@ pub fn checkout_branch(repo: &mut git2::Repository, name: &str) -> AppResult<()>
 
     let target = if repo.find_branch(name, git2::BranchType::Local).is_ok() {
         Target::Local(name.to_string())
-    } else if repo.find_branch(name, git2::BranchType::Remote).is_ok() {
+    } else if let Ok(remote_branch) = repo.find_branch(name, git2::BranchType::Remote) {
+        let remote_oid = remote_branch.get().peel_to_commit().ok().map(|c| c.id());
+        drop(remote_branch);
         let (_remote_name, short) = split_remote_branch(repo, name)?;
-        if repo.find_branch(&short, git2::BranchType::Local).is_ok() {
-            Target::Local(short)
+        if let Ok(local_branch) = repo.find_branch(&short, git2::BranchType::Local) {
+            let local_oid = local_branch.get().peel_to_commit().ok().map(|c| c.id());
+            let tracks_remote = local_branch
+                .upstream()
+                .ok()
+                .and_then(|u| u.name().ok().flatten().map(str::to_string))
+                .as_deref()
+                == Some(name);
+            if local_oid.is_some() && local_oid == remote_oid && tracks_remote {
+                Target::Local(short)
+            } else {
+                return Err(AppError::InvalidArg(format!(
+                    "本地分支 {short} 已存在且与远程分支 {name} 提交或跟踪关系不一致，请先直接切换到 {short} 并同步或删除后再检出 {name}"
+                )));
+            }
         } else {
             Target::CreateTracking { short }
         }

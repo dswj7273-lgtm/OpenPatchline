@@ -20,7 +20,7 @@ mod status;
 #[cfg(test)]
 mod tests;
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use crate::error::{AppError, AppResult};
 use crate::types::{ChangeType, ChildRepo, RepoInfo, RepoState};
@@ -205,10 +205,12 @@ pub(super) fn delta_change_type(status: git2::Delta) -> Option<ChangeType> {
     }
 }
 
-/// 校验仓库内相对路径合法性（非空、非绝对路径、不含 `..` / `/` 根或盘符）。
+/// 校验仓库内相对路径合法性（非空、含有效路径段、无 NUL/绝对路径/`..`/盘符）。
 pub(crate) fn validate_rel_path(path: &str) -> AppResult<&Path> {
-    if path.is_empty() {
-        return Err(AppError::InvalidArg("path 不能为空".to_string()));
+    if path.is_empty() || path.contains('\0') {
+        return Err(AppError::InvalidArg(
+            "path 不能为空且不能包含空字节".to_string(),
+        ));
     }
     let rel = Path::new(path);
     if rel.is_absolute()
@@ -218,10 +220,80 @@ pub(crate) fn validate_rel_path(path: &str) -> AppResult<&Path> {
                 Component::ParentDir | Component::RootDir | Component::Prefix(_)
             )
         })
+        || !rel.components().any(|c| matches!(c, Component::Normal(_)))
     {
         return Err(AppError::InvalidArg(format!("非法相对路径: {path}")));
     }
     Ok(rel)
+}
+
+/// 将仓库相对路径解析为规范化工作区根下的绝对路径，拦截父目录符号链接逃逸。
+pub(crate) fn resolve_workdir_path(workdir: &Path, path: &str) -> AppResult<PathBuf> {
+    let rel = validate_rel_path(path)?;
+    let canon_root = std::fs::canonicalize(workdir)
+        .map_err(|e| AppError::Io(format!("解析工作区根目录失败: {e}")))?;
+
+    let segments: Vec<_> = rel
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(seg) => Some(seg),
+            _ => None,
+        })
+        .collect();
+
+    let mut cur = canon_root.clone();
+    for (idx, seg) in segments.iter().enumerate() {
+        cur.push(seg);
+        let is_last = idx + 1 == segments.len();
+        match std::fs::symlink_metadata(&cur) {
+            Ok(meta) => {
+                if !is_last && meta.file_type().is_symlink() {
+                    let resolved = std::fs::canonicalize(&cur).map_err(|_| {
+                        AppError::InvalidArg(format!("路径包含悬空或越界符号链接: {path}"))
+                    })?;
+                    if !resolved.starts_with(&canon_root) {
+                        return Err(AppError::InvalidArg(format!(
+                            "路径超出仓库工作区范围: {path}"
+                        )));
+                    }
+                    cur = resolved;
+                } else if is_last && !meta.file_type().is_symlink() {
+                    let resolved = std::fs::canonicalize(&cur)
+                        .map_err(|e| AppError::Io(format!("解析工作区路径 {path} 失败: {e}")))?;
+                    if !resolved.starts_with(&canon_root) {
+                        return Err(AppError::InvalidArg(format!(
+                            "路径超出仓库工作区范围: {path}"
+                        )));
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => return Err(AppError::Io(format!("检查工作区路径 {path} 失败: {e}"))),
+        }
+    }
+    Ok(canon_root.join(rel))
+}
+
+/// 安全读取工作区文件字节：校验仓库边界，对符号链接仅读取其链接目标文本而不解引用外部目标。
+pub(super) fn read_workdir_file(workdir: &Path, path: &str) -> AppResult<Option<Vec<u8>>> {
+    let full = resolve_workdir_path(workdir, path)?;
+    match std::fs::symlink_metadata(&full) {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() {
+                let target = std::fs::read_link(&full)
+                    .map_err(|e| AppError::Io(format!("读取符号链接 {path} 失败: {e}")))?;
+                return Ok(Some(target.to_string_lossy().into_owned().into_bytes()));
+            }
+            if meta.is_dir() {
+                return Ok(None);
+            }
+            std::fs::read(&full)
+                .map(Some)
+                .map_err(|e| AppError::Io(format!("读取工作区文件 {path} 失败: {e}")))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(AppError::Io(format!("读取工作区文件 {path} 失败: {e}"))),
+    }
 }
 
 /// `&Path` → 展示用字符串。

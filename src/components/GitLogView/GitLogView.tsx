@@ -88,6 +88,7 @@ function GitCommandCenter({
   const [mergeTarget, setMergeTarget] = useState("");
   const [stashMessage, setStashMessage] = useState("");
   const [confirmDiscardAll, setConfirmDiscardAll] = useState(false);
+  const [confirmForcePush, setConfirmForcePush] = useState(false);
 
   const mergeCandidates = useMemo(() => branches.filter((b) => !b.isCurrent), [branches]);
   const currentBranch = useMemo(() => branches.find((b) => b.isCurrent) ?? null, [branches]);
@@ -107,6 +108,7 @@ function GitCommandCenter({
       void loadStashes();
     }
     setConfirmDiscardAll(false);
+    setConfirmForcePush(false);
   }, [activeTab, loadStashes]);
 
   const busy = gitBusy !== null;
@@ -249,7 +251,7 @@ function GitCommandCenter({
                 type="button"
                 className="gitlog-cmd-item gitlog-cmd-item--warn"
                 disabled={busy}
-                onClick={() => void runAndClose(pushForceWithLease)}
+                onClick={() => setConfirmForcePush(true)}
               >
                 <PushIcon />
                 <div className="gitlog-cmd-item-copy">
@@ -270,6 +272,30 @@ function GitCommandCenter({
                 </div>
               </button>
             </div>
+            {confirmForcePush && (
+              <div className="gitlog-cmd-confirm">
+                <span className="gitlog-cmd-confirm-text">
+                  确认执行安全强推 (git push --force-with-lease)？这可能覆盖远端分支历史。
+                </span>
+                <div className="gitlog-cmd-confirm-ops">
+                  <button
+                    type="button"
+                    className="btn gitlog-mini-btn"
+                    onClick={() => setConfirmForcePush(false)}
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="btn gitlog-mini-btn is-danger-solid"
+                    disabled={busy}
+                    onClick={() => void runAndClose(pushForceWithLease)}
+                  >
+                    确认强推
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

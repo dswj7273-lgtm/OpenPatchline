@@ -171,7 +171,9 @@ export interface WorkspaceSlice {
   commitMetadata: CommitMetadata | null;
   commitHistory: string[];
   gitBusy: GitBusy;
+  pendingRepoRefresh: string | null;
   remoteProgress: { op: string; message: string; percent: number | null } | null;
+  handleRepoStatusChanged: (repoId: string) => void;
   loadFileStatus: () => Promise<void>;
   loadCommitMetadata: () => Promise<void>;
   stageFile: (path: string) => Promise<void>;

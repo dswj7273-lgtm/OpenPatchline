@@ -2,7 +2,10 @@
 
 use std::path::Path;
 
-use super::{delta_change_type, find_commit, fresh_index, head_tree, path_str};
+use super::{
+    delta_change_type, find_commit, fresh_index, head_tree, path_str, read_workdir_file,
+    resolve_workdir_path, validate_rel_path,
+};
 use crate::diff_engine::{self, DiffOptions as TextDiffOptions};
 use crate::error::{AppError, AppResult};
 use crate::types::{ChangeType, ChangedFile, FileDiffResult};
@@ -109,6 +112,7 @@ pub fn file_diff_commit(
     commit_id: &str,
     path: &str,
 ) -> AppResult<FileDiffResult> {
+    validate_rel_path(path)?;
     let commit = find_commit(repo, commit_id)?;
     let new_tree = commit
         .tree()
@@ -124,6 +128,7 @@ pub fn file_diff_range(
     target_ref: &str,
     path: &str,
 ) -> AppResult<FileDiffResult> {
+    validate_rel_path(path)?;
     let base_tree = resolve_tree(repo, base_ref)?;
     let target_tree = resolve_tree(repo, target_ref)?;
     file_diff_between_trees(
@@ -160,6 +165,7 @@ fn file_diff_between_trees(
 
 /// 暂存区中单个文件的 diff：HEAD blob vs index blob。
 pub fn file_diff_staged(repo: &git2::Repository, path: &str) -> AppResult<FileDiffResult> {
+    validate_rel_path(path)?;
     let head_tree = head_tree(repo)?;
     let index = fresh_index(repo)?;
 
@@ -195,9 +201,11 @@ pub fn file_diff_staged(repo: &git2::Repository, path: &str) -> AppResult<FileDi
 
 /// 工作区中单个文件的 diff：index blob（不在 index 则取 HEAD）vs 工作区文件字节。
 pub fn file_diff_workdir(repo: &git2::Repository, path: &str) -> AppResult<FileDiffResult> {
+    let rel = validate_rel_path(path)?;
     let workdir = repo
         .workdir()
         .ok_or_else(|| AppError::InvalidArg("bare 仓库没有工作区".to_string()))?;
+    let _ = resolve_workdir_path(workdir, path)?;
     let index = fresh_index(repo)?;
     let head_tree = head_tree(repo)?;
 
@@ -213,7 +221,14 @@ pub fn file_diff_workdir(repo: &git2::Repository, path: &str) -> AppResult<FileD
             path_str(delta.old_file().path()),
             path_str(delta.new_file().path()),
         ),
-        None => (None, Some(path.to_string()), Some(path.to_string())),
+        None => {
+            let tracked = index.get_path(rel, 0).is_some()
+                || head_tree.as_ref().is_some_and(|t| t.get_path(rel).is_ok());
+            if !tracked {
+                return Err(AppError::NotFound(format!("文件 {path} 在工作区无变更")));
+            }
+            (None, Some(path.to_string()), Some(path.to_string()))
+        }
     };
 
     let old_lookup = old_path.as_deref().unwrap_or(path);
@@ -222,10 +237,10 @@ pub fn file_diff_workdir(repo: &git2::Repository, path: &str) -> AppResult<FileD
         None => blob_bytes_from_tree(repo, head_tree.as_ref(), old_lookup)?,
     };
     let new_lookup = new_path.as_deref().unwrap_or(path);
-    let new = match std::fs::read(workdir.join(new_lookup)) {
-        Ok(bytes) => Some(bytes),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(AppError::Io(format!("读取工作区文件 {path} 失败: {e}"))),
+    let new = if status == Some(git2::Delta::Deleted) {
+        None
+    } else {
+        read_workdir_file(workdir, new_lookup)?
     };
 
     let change_type = match status.and_then(delta_change_type) {

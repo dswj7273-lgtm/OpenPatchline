@@ -87,9 +87,25 @@ fn resolve_start(repo: &git2::Repository, branch: &str) -> AppResult<git2::Oid> 
     Ok(commit.id())
 }
 
-/// 收集 commit-id → 引用标签表（本地/远程分支、标签、HEAD 当前分支）。
+/// 收集 commit-id → 引用标签表（本地/远程分支、标签、HEAD 当前分支；当前分支仅保留 Head 徽章避免同名重复）。
 fn collect_ref_labels(repo: &git2::Repository) -> AppResult<HashMap<git2::Oid, Vec<RefLabel>>> {
     let mut map: HashMap<git2::Oid, Vec<RefLabel>> = HashMap::new();
+    let head_branch = repo.head().ok().and_then(|head| {
+        if !head.is_branch() {
+            return None;
+        }
+        let name = head.shorthand().ok()?.to_string();
+        let commit = head.peel_to_commit().ok()?;
+        Some((name, commit.id()))
+    });
+
+    if let Some((ref name, oid)) = head_branch {
+        map.entry(oid).or_default().push(RefLabel {
+            name: name.clone(),
+            kind: RefKind::Head,
+        });
+    }
+
     let references = repo
         .references()
         .map_err(|e| AppError::Git(format!("枚举引用失败: {e}")))?;
@@ -99,6 +115,9 @@ fn collect_ref_labels(repo: &git2::Repository) -> AppResult<HashMap<git2::Oid, V
             continue;
         };
         let (short, kind) = if let Some(s) = name.strip_prefix("refs/heads/") {
+            if head_branch.as_ref().is_some_and(|(h, _)| h == s) {
+                continue;
+            }
             (s, RefKind::Local)
         } else if let Some(s) = name.strip_prefix("refs/remotes/") {
             (s, RefKind::Remote)
@@ -113,15 +132,6 @@ fn collect_ref_labels(repo: &git2::Repository) -> AppResult<HashMap<git2::Oid, V
                 kind,
             });
         }
-    }
-    if let Ok(head) = repo.head()
-        && head.is_branch()
-        && let (Ok(name), Ok(commit)) = (head.shorthand(), head.peel_to_commit())
-    {
-        map.entry(commit.id()).or_default().push(RefLabel {
-            name: name.to_string(),
-            kind: RefKind::Head,
-        });
     }
     Ok(map)
 }

@@ -53,6 +53,7 @@ export const createRepoSlice: AppSlice<RepoSlice> = (set, get) => ({
         commitMetadata: null,
         commitHistory: loadCommitHistory(repo.id),
         gitBusy: null,
+        pendingRepoRefresh: null,
         remoteProgress: null,
       });
       await get().reloadGraph();

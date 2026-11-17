@@ -1,8 +1,6 @@
 //! 工作区状态查询与 stage / unstage 子模块。
 
-use std::path::Path;
-
-use super::{delta_change_type, fresh_index, head_commit};
+use super::{delta_change_type, fresh_index, head_commit, resolve_workdir_path, validate_rel_path};
 use crate::error::{AppError, AppResult};
 use crate::types::FileStatus;
 
@@ -53,14 +51,18 @@ pub fn status(repo: &git2::Repository) -> AppResult<Vec<FileStatus>> {
 
 /// 暂存单个文件（Stage）；若路径处于冲突状态同时清除 stage 1/2/3 冲突条目。
 pub fn stage_file(repo: &mut git2::Repository, path: &str) -> AppResult<()> {
+    let rel = validate_rel_path(path)?;
     let workdir = repo
         .workdir()
         .ok_or_else(|| AppError::InvalidArg("bare 仓库没有工作区".to_string()))?;
+    let full = resolve_workdir_path(workdir, path)?;
     let mut index = fresh_index(repo)?;
 
-    let rel = Path::new(path);
-    let full = workdir.join(rel);
-    if full.is_dir() {
+    let meta = std::fs::symlink_metadata(&full);
+    if meta
+        .as_ref()
+        .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+    {
         let pathspec = [rel.to_string_lossy().into_owned()];
         index
             .add_all(&pathspec, git2::IndexAddOption::DEFAULT, None)
@@ -68,7 +70,7 @@ pub fn stage_file(repo: &mut git2::Repository, path: &str) -> AppResult<()> {
         index
             .update_all(&pathspec, None)
             .map_err(|e| AppError::Git(format!("同步目录 {path} 的删除失败: {e}")))?;
-    } else if full.exists() {
+    } else if meta.is_ok() {
         let _ = index.conflict_remove(rel);
         index
             .add_path(rel)
@@ -89,6 +91,7 @@ pub fn stage_file(repo: &mut git2::Repository, path: &str) -> AppResult<()> {
 
 /// 取消暂存单个文件（Unstage）。
 pub fn unstage_file(repo: &mut git2::Repository, path: &str) -> AppResult<()> {
+    let rel = validate_rel_path(path)?;
     match head_commit(repo)? {
         Some(head) => {
             repo.reset_default(Some(head.as_object()), [path])
@@ -96,9 +99,9 @@ pub fn unstage_file(repo: &mut git2::Repository, path: &str) -> AppResult<()> {
         }
         None => {
             let mut index = fresh_index(repo)?;
-            if index.get_path(Path::new(path), 0).is_some() {
+            if index.get_path(rel, 0).is_some() {
                 index
-                    .remove_path(Path::new(path))
+                    .remove_path(rel)
                     .map_err(|e| AppError::Git(format!("从 index 移除 {path} 失败: {e}")))?;
                 index
                     .write()

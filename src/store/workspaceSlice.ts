@@ -14,6 +14,9 @@ import {
 } from "./types";
 
 export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
+  let statusReqSeq = 0;
+  let branchesReqSeq = 0;
+
   /** 串行独占型 git 操作公共骨架：加锁 gitBusy、检查仓库切换过期、统一异常上报与状态复位。 */
   async function runExclusive(
     busyKind: Exclude<GitBusy, null>,
@@ -51,10 +54,19 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
       if (get().repo?.id === repoId) set({ error: errMsg });
       return false;
     } finally {
+      const pendingId = get().pendingRepoRefresh;
+      const sameRepo = get().repo?.id === repoId;
       set({
         gitBusy: null,
+        pendingRepoRefresh: null,
         ...(opts.isRemote ? { remoteProgress: null } : {}),
       });
+      if (sameRepo && pendingId === repoId) {
+        void get().refreshRepoInfo();
+        void get().loadFileStatus();
+        void get().reloadGraph();
+        void get().loadBranches();
+      }
     }
   }
 
@@ -66,7 +78,21 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
     commitMetadata: null,
     commitHistory: [],
     gitBusy: null,
+    pendingRepoRefresh: null,
     remoteProgress: null,
+
+    handleRepoStatusChanged: (repoId) => {
+      const state = get();
+      if (!state.repo || state.repo.id !== repoId) return;
+      if (state.gitBusy !== null) {
+        set({ pendingRepoRefresh: repoId });
+        return;
+      }
+      void state.refreshRepoInfo();
+      void state.loadFileStatus();
+      void state.reloadGraph();
+      void state.loadBranches();
+    },
 
     loadFileStatus: async () => {
       const { repo } = get();
@@ -74,11 +100,17 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
         set({ error: "当前未打开仓库" });
         return;
       }
+      const repoId = repo.id;
+      const seq = ++statusReqSeq;
       try {
-        const status = await api.getFileStatus(repo.id);
-        set({ fileStatus: status });
+        const status = await api.getFileStatus(repoId);
+        if (get().repo?.id === repoId && seq === statusReqSeq) {
+          set({ fileStatus: status });
+        }
       } catch (e) {
-        set({ error: reportError("loadFileStatus", e) });
+        if (get().repo?.id === repoId && seq === statusReqSeq) {
+          set({ error: reportError("loadFileStatus", e) });
+        }
       }
     },
 
@@ -186,14 +218,22 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
         set({ error: "当前未打开仓库" });
         return;
       }
+      const repoId = repo.id;
+      const seq = ++branchesReqSeq;
       set({ branchesLoading: true });
       try {
-        const branches = await api.listBranches(repo.id);
-        set({ branches });
+        const branches = await api.listBranches(repoId);
+        if (get().repo?.id === repoId && seq === branchesReqSeq) {
+          set({ branches });
+        }
       } catch (e) {
-        set({ error: reportError("loadBranches", e) });
+        if (get().repo?.id === repoId && seq === branchesReqSeq) {
+          set({ error: reportError("loadBranches", e) });
+        }
       } finally {
-        set({ branchesLoading: false });
+        if (seq === branchesReqSeq) {
+          set({ branchesLoading: false });
+        }
       }
     },
 

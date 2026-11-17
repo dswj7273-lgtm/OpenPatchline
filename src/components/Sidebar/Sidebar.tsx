@@ -427,11 +427,16 @@ function BranchPanel({
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [newBranch, setNewBranch] = useState("");
+  const [confirmDeleteBranch, setConfirmDeleteBranch] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{
     branch: BranchInfo;
     x: number;
     y: number;
   } | null>(null);
+
+  useEffect(() => {
+    setConfirmDeleteBranch(null);
+  }, [open, repo?.id]);
 
   useEffect(() => {
     if (!ctxMenu) return;
@@ -571,6 +576,35 @@ function BranchPanel({
             <p className="sidebar-branch-empty">没有匹配的分支</p>
           )}
 
+          {confirmDeleteBranch && (
+            <div className="sidebar-confirm" role="alertdialog" aria-label="确认删除分支">
+              <span className="sidebar-confirm-text">
+                确认删除本地分支 <code>{confirmDeleteBranch}</code>？
+              </span>
+              <div className="sidebar-confirm-ops">
+                <button
+                  type="button"
+                  className="btn sidebar-confirm-btn"
+                  onClick={() => setConfirmDeleteBranch(null)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="btn sidebar-confirm-btn is-danger"
+                  disabled={gitBusy !== null}
+                  onClick={() => {
+                    const target = confirmDeleteBranch;
+                    setConfirmDeleteBranch(null);
+                    void deleteBranch(target, false);
+                  }}
+                >
+                  确认删除
+                </button>
+              </div>
+            </div>
+          )}
+
           {locals.length > 0 && <div className="sidebar-branch-group-title">本地分支</div>}
           {locals.map((b) => (
             <div
@@ -629,7 +663,7 @@ function BranchPanel({
                     disabled={gitBusy !== null}
                     aria-label={`删除分支 ${b.name}`}
                     title={`删除本地分支 ${b.name}`}
-                    onClick={() => void deleteBranch(b.name, false)}
+                    onClick={() => setConfirmDeleteBranch(b.name)}
                   >
                     <TrashIcon />
                   </button>
@@ -745,7 +779,7 @@ function BranchPanel({
                 onClick={() => {
                   const name = ctxMenu.branch.name;
                   setCtxMenu(null);
-                  void deleteBranch(name, false);
+                  setConfirmDeleteBranch(name);
                 }}
               >
                 <TrashIcon />
@@ -785,6 +819,14 @@ export function Sidebar() {
   const [untrackedOpen, setUntrackedOpen] = useState(false);
   const [branchPanelOpen, setBranchPanelOpen] = useState(false);
   const [expandedDirs, setExpandedDirs] = useState<ReadonlySet<string>>(new Set());
+  const [confirmDiscard, setConfirmDiscard] = useState<{
+    path: string;
+    untracked: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    setConfirmDiscard(null);
+  }, [repo?.id]);
 
   useEffect(() => {
     try {
@@ -887,6 +929,37 @@ export function Sidebar() {
         </div>
 
         <div className="sidebar-groups">
+          {confirmDiscard && (
+            <div className="sidebar-confirm" role="alertdialog" aria-label="确认丢弃工作区更改">
+              <span className="sidebar-confirm-text">
+                {confirmDiscard.untracked ? "确认永久删除未跟踪文件 " : "确认丢弃文件 "}
+                <code>{confirmDiscard.path}</code>
+                {confirmDiscard.untracked ? "？" : " 的未暂存修改？"}
+              </span>
+              <div className="sidebar-confirm-ops">
+                <button
+                  type="button"
+                  className="btn sidebar-confirm-btn"
+                  onClick={() => setConfirmDiscard(null)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="btn sidebar-confirm-btn is-danger"
+                  disabled={gitBusy !== null}
+                  onClick={() => {
+                    const target = confirmDiscard.path;
+                    setConfirmDiscard(null);
+                    void discardFile(target);
+                  }}
+                >
+                  {confirmDiscard.untracked ? "确认删除" : "确认丢弃"}
+                </button>
+              </div>
+            </div>
+          )}
+
           {conflicted.length > 0 && (
             <FileGroup
               title="冲突文件"
@@ -960,7 +1033,7 @@ export function Sidebar() {
                 onOpenFile={(f) => openEntry(f, "unstaged")}
                 onStageDir={(_, paths) => void stageFiles(paths)}
                 onStageFile={(p) => void stageFile(p)}
-                onDiscardFile={(p) => void discardFile(p)}
+                onDiscardFile={(p) => setConfirmDiscard({ path: p, untracked: false })}
               />
             ) : (
               <p className="sidebar-group-empty">工作区无未暂存修改</p>
@@ -988,7 +1061,7 @@ export function Sidebar() {
                 onOpenFile={(f) => openEntry(f, "unstaged")}
                 onStageDir={(_, paths) => void stageFiles(paths)}
                 onStageFile={(p) => void stageFile(p)}
-                onDiscardFile={(p) => void discardFile(p)}
+                onDiscardFile={(p) => setConfirmDiscard({ path: p, untracked: true })}
               />
             ) : (
               <p className="sidebar-group-empty">没有未跟踪文件</p>

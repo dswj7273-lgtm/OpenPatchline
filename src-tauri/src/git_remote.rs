@@ -897,40 +897,32 @@ pub fn reset_head(
     action_result(repo, output)
 }
 
-/// 丢弃单个未暂存或未跟踪文件的更改。
+/// 丢弃单个未暂存或未跟踪文件的更改（保留已暂存修改）。
 ///
-/// - 校验路径为仓库内合法相对路径（禁止 `..` 与绝对路径）；
-/// - 已在 HEAD 中跟踪的文件执行 `git checkout HEAD -- <path>`；
-/// - 仅在暂存区（如 unborn HEAD / 新暂存文件）的文件执行 `git checkout -- <path>`；
-/// - 未跟踪文件直接从工作区删除。
+/// - 校验路径为仓库工作区内合法相对路径（禁止 `..`、绝对路径与父目录符号链接逃逸）；
+/// - 处于冲突状态的文件拒绝直接丢弃；
+/// - 已存在于暂存区（index stage 0）的文件执行 `git checkout -- <path>`，从暂存区恢复工作区而不覆盖已暂存修改；
+/// - 不在暂存区的文件（未跟踪文件，或已暂存删除但工作区又新建的同名文件）仅删除工作区条目。
 pub fn discard_file(repo: &git2::Repository, workdir: &Path, path: &str) -> AppResult<()> {
     let rel = git_service::validate_rel_path(path)?;
+    let full = git_service::resolve_workdir_path(workdir, path)?;
+    let index = git_service::fresh_index(repo)?;
 
-    let in_head = repo
-        .head()
-        .ok()
-        .and_then(|h| h.peel_to_tree().ok())
-        .map(|tree| tree.get_path(rel).is_ok())
-        .unwrap_or(false);
-    let in_index = git_service::fresh_index(repo)
-        .ok()
-        .map(|idx| idx.get_path(rel, 0).is_some())
-        .unwrap_or(false);
+    if (1..=3).any(|stage| index.get_path(rel, stage).is_some()) {
+        return Err(AppError::InvalidArg(format!(
+            "文件 {path} 存在未解决冲突，请先解决冲突后再操作"
+        )));
+    }
 
-    if in_head {
-        run_git(workdir, &["checkout", "HEAD", "--", path])?;
-    } else if in_index {
+    if index.get_path(rel, 0).is_some() {
         run_git(workdir, &["checkout", "--", path])?;
-    } else {
-        let full = workdir.join(rel);
-        if let Ok(meta) = std::fs::symlink_metadata(&full) {
-            if meta.is_dir() && !meta.file_type().is_symlink() {
-                std::fs::remove_dir_all(&full)
-                    .map_err(|e| AppError::Io(format!("删除未跟踪目录 {path} 失败: {e}")))?;
-            } else {
-                std::fs::remove_file(&full)
-                    .map_err(|e| AppError::Io(format!("删除未跟踪文件 {path} 失败: {e}")))?;
-            }
+    } else if let Ok(meta) = std::fs::symlink_metadata(&full) {
+        if meta.is_dir() && !meta.file_type().is_symlink() {
+            std::fs::remove_dir_all(&full)
+                .map_err(|e| AppError::Io(format!("删除未跟踪目录 {path} 失败: {e}")))?;
+        } else {
+            std::fs::remove_file(&full)
+                .map_err(|e| AppError::Io(format!("删除未跟踪文件 {path} 失败: {e}")))?;
         }
     }
     Ok(())
@@ -1552,6 +1544,41 @@ mod tests {
             reset_head(&fx.work, &dir, "HEAD", "unknown"),
             Err(AppError::InvalidArg(_))
         ));
+    }
+
+    #[test]
+    fn discard_file_preserves_staged_changes_and_staged_deletions() {
+        let fx = setup_with_bare_remote();
+        let dir = fx.work.workdir().unwrap().to_path_buf();
+
+        // 先在 HEAD 提交 tracked.txt，再暂存 v2 并继续修改工作区为 v3；
+        // discard_file 必须从 index 恢复 v2，不得执行 checkout HEAD 回退暂存区到 v1。
+        std::fs::write(dir.join("tracked.txt"), "v1-head\n").unwrap();
+        run_git(&dir, &["add", "tracked.txt"]).unwrap();
+        run_git(&dir, &["commit", "-m", "add tracked"]).unwrap();
+
+        std::fs::write(dir.join("tracked.txt"), "v2-staged\n").unwrap();
+        run_git(&dir, &["add", "tracked.txt"]).unwrap();
+        std::fs::write(dir.join("tracked.txt"), "v3-workdir\n").unwrap();
+
+        discard_file(&fx.work, &dir, "tracked.txt").expect("discard_file 失败");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("tracked.txt")).unwrap(),
+            "v2-staged\n",
+            "工作区应从 index 恢复而不丢弃已暂存更改"
+        );
+        let idx = git_service::fresh_index(&fx.work).unwrap();
+        let entry = idx.get_path(Path::new("tracked.txt"), 0).unwrap();
+        let blob = fx.work.find_blob(entry.id).unwrap();
+        assert_eq!(blob.content(), b"v2-staged\n");
+
+        // 已暂存删除后，工作区又出现同名未跟踪文件：discard_file 应删除该文件且保留暂存删除
+        run_git(&dir, &["rm", "-f", "tracked.txt"]).unwrap();
+        std::fs::write(dir.join("tracked.txt"), "new-untracked\n").unwrap();
+        discard_file(&fx.work, &dir, "tracked.txt").expect("discard untracked after rm 失败");
+        assert!(!dir.join("tracked.txt").exists());
+        let idx2 = git_service::fresh_index(&fx.work).unwrap();
+        assert!(idx2.get_path(Path::new("tracked.txt"), 0).is_none());
     }
 
     #[test]
