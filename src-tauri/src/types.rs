@@ -615,3 +615,17 @@ pub struct FileHistoryEntry {
     /// 重命名来源路径；仅 change_type == renamed 时为 Some。
     pub old_path: Option<String>,
 }
+
+/// 危险操作备份引用条目（v0.8 / 8.5 撤销入口）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SafetyBackup {
+    /// 短引用名（refs/opl-backup/ 之后的部分）。
+    pub ref_name: String,
+    /// 完整引用名。
+    pub full_ref: String,
+    pub commit_id: String,
+    pub short_id: String,
+    pub summary: String,
+    pub timestamp: i64,
+}

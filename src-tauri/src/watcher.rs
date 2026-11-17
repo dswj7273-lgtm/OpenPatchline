@@ -132,6 +132,14 @@ impl RepoWatcher {
             .insert(repo_id.to_string(), watcher);
         Ok(())
     }
+
+    /// 停止监听并移除条目（v0.8 / 8.4 仓库淘汰时释放 notify 句柄与防抖线程）。
+    pub fn unwatch(&self, repo_id: &str) {
+        self.watchers
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(repo_id);
+    }
 }
 
 #[cfg(test)]

@@ -280,3 +280,79 @@ fn integration_detached_head_flow() {
         Some(main_branch.as_str())
     );
 }
+
+/// v0.8 / 8.1 端到端旅程：打开仓库 → 修改 → 暂存 → 提交 → 推送（本地裸远程），
+/// 全程经应用自身的命令层实现（RepoManager + git_service + git_remote）。
+#[test]
+fn integration_full_journey_open_stage_commit_push_fetch() {
+    // 1. 准备裸远程与首个提交（经 CLI 建立远端历史）
+    let remote_tmp = tempfile::tempdir().expect("创建远程目录失败");
+    {
+        let bare = git2::Repository::init_bare(remote_tmp.path()).expect("init bare");
+        drop(bare);
+    }
+    let work_tmp = tempfile::tempdir().expect("创建工作目录失败");
+    init_configured_repo(work_tmp.path());
+    write_and_commit(work_tmp.path(), "README.md", "# hello\n", "initial");
+    run_git(
+        work_tmp.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_tmp.path().to_str().unwrap(),
+        ],
+    );
+    run_git(work_tmp.path(), &["push", "-u", "origin", "HEAD"]);
+
+    // 2. 经 RepoManager 打开（应用打开仓库的路径）
+    let manager = RepoManager::new();
+    let info = manager.open(work_tmp.path()).expect("打开仓库失败");
+
+    // 3. 修改文件 → 应用侧读取状态
+    std::fs::write(work_tmp.path().join("README.md"), "# hello v2\n").expect("写入失败");
+    let entry = manager.entry(&info.id).expect("取条目失败");
+    {
+        let e = lock_entry(&entry);
+        let statuses = git_service::status(&e.repo).expect("读取状态失败");
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].unstaged, Some(ChangeType::Modified));
+    }
+
+    // 4. 暂存 → 提交（应用侧写路径）
+    {
+        let mut e = lock_entry(&entry);
+        git_service::stage_file(&mut e.repo, "README.md").expect("暂存失败");
+        let new_id = git_service::create_commit(&mut e.repo, "feat: bump to v2")
+            .expect("提交失败");
+        assert_eq!(new_id.len(), 40);
+    }
+
+    // 5. 推送到远程（应用侧 push 路径）
+    {
+        let e = lock_entry(&entry);
+        let workdir = e.repo.workdir().unwrap().to_path_buf();
+        git_remote::push(&e.repo, &workdir).expect("推送失败");
+    }
+
+    // 6. 远程确实收到了新提交：浅验证 —— 在远程裸仓库上读取 HEAD 提交说明
+    {
+        let bare = git2::Repository::open_bare(remote_tmp.path()).expect("打开裸远程");
+        let head = bare
+            .find_reference("refs/heads/master")
+            .or_else(|_| bare.find_reference("refs/heads/main"))
+            .expect("读取远程 HEAD")
+            .peel_to_commit()
+            .expect("解析远程 HEAD");
+        assert_eq!(head.message().unwrap().trim(), "feat: bump to v2");
+    }
+
+    // 7. 再次 fetch（应用侧）应无新对象但不报错
+    {
+        let e = lock_entry(&entry);
+        let workdir = e.repo.workdir().unwrap().to_path_buf();
+        git_remote::fetch(&e.repo, &workdir, None).expect("fetch 失败");
+    }
+    // commit-graph 维护不破坏仓库
+    assert!(work_tmp.path().join(".git").exists());
+}

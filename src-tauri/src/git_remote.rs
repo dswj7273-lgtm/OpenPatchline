@@ -25,7 +25,9 @@ use std::time::{Duration, Instant};
 
 use crate::error::{AppError, AppResult};
 use crate::git_service;
-use crate::types::{FetchResult, GitActionResult, PullResult, PushResult, RepoState, StashEntry};
+use crate::types::{
+    FetchResult, GitActionResult, PullResult, PushResult, RepoState, SafetyBackup, StashEntry,
+};
 
 /// 返回给前端的输出摘要行数上限。
 const MAX_OUTPUT_LINES: usize = 50;
@@ -465,6 +467,20 @@ pub(crate) fn run_git_for_service(workdir: &Path, args: &[&str]) -> AppResult<St
     run_git(workdir, args)
 }
 
+/// 读取 git CLI 版本字符串（诊断信息用）。
+pub fn git_version() -> AppResult<String> {
+    let (stdout, _) = run_git_raw(Path::new("."), &["--version"])?;
+    Ok(stdout.trim().to_string())
+}
+
+/// 拉取后维护 commit-graph 文件（v0.8 / 8.3 大仓库图遍历加速）。
+///
+/// 失败静默忽略：commit-graph 仅是加速缓存，缺失不影响正确性；
+/// 大仓库首次构建可能稍慢，放在拉取完成之后不阻塞进度展示。
+fn maintain_commit_graph(workdir: &Path) {
+    let _ = run_git(workdir, &["commit-graph", "write", "--reachable", "--split"]);
+}
+
 fn run_git_streaming(
     workdir: &Path,
     args: &[&str],
@@ -587,6 +603,8 @@ pub fn fetch_with_progress(
         &["fetch", "--progress", "--prune", &remote_name],
         progress,
     )?;
+    // 拉取后维护 commit-graph（v0.8 / 8.3；失败静默）。
+    maintain_commit_graph(workdir);
     Ok(FetchResult {
         remote: remote_name,
         output,
@@ -633,6 +651,8 @@ pub fn pull_with_progress(
     }
     let output = run_git_streaming(workdir, &args, progress)?;
     let repo_info = git_service::repo_info(repo)?;
+    // 拉取后维护 commit-graph（v0.8 / 8.3；失败静默）。
+    maintain_commit_graph(workdir);
     Ok(PullResult {
         output,
         repo: repo_info,
@@ -646,6 +666,12 @@ fn push_branch_with(
     extra_flag: Option<&str>,
     progress: Option<RemoteProgress<'_>>,
 ) -> AppResult<PushResult> {
+    // 安全强推会改写远程历史：记录本地当前头便于恢复（v0.8 / 8.5）。
+    let _backup = if extra_flag.is_some_and(|f| f.contains("force")) {
+        backup_before_destructive(repo)
+    } else {
+        None
+    };
     let branch = repo
         .head()
         .ok()
@@ -1015,8 +1041,16 @@ pub fn reset_head(
         }
     };
     let rev = validate_target_ref(repo, target, "重置目标")?;
+    // hard 模式会丢弃工作区与暂存区：先记录备份引用（v0.8 / 8.5）。
+    let backup_note = if mode_flag == "--hard" {
+        backup_before_destructive(repo)
+            .map(|r| format!("（原 HEAD 已备份于 {r}）"))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     let output = run_git(workdir, &["reset", mode_flag, rev])?;
-    action_result(repo, output)
+    action_result(repo, format!("{output}{backup_note}"))
 }
 
 /// 丢弃单个未暂存或未跟踪文件的更改（保留已暂存修改）。
@@ -1052,6 +1086,11 @@ pub fn discard_file(repo: &git2::Repository, workdir: &Path, path: &str) -> AppR
 
 /// 丢弃工作区与暂存区的全部未提交更改（`git reset --hard HEAD` + `git clean -fd`）。
 pub fn discard_all(repo: &git2::Repository, workdir: &Path) -> AppResult<GitActionResult> {
+    // 会丢弃全部未提交更改（含未跟踪文件，clean 无法从任何 ref 恢复）：
+    // 先记录备份引用（v0.8 / 8.5）。
+    let backup_note = backup_before_destructive(repo)
+        .map(|r| format!("（原 HEAD 已备份于 {r}）"))
+        .unwrap_or_default();
     let mut outputs = Vec::new();
     if repo.head().is_ok() {
         let reset_out = run_git(workdir, &["reset", "--hard", "HEAD"])?;
@@ -1063,7 +1102,7 @@ pub fn discard_all(repo: &git2::Repository, workdir: &Path) -> AppResult<GitActi
     if !clean_out.is_empty() {
         outputs.push(clean_out);
     }
-    action_result(repo, outputs.join("\n"))
+    action_result(repo, format!("{}{backup_note}", outputs.join("\n")))
 }
 
 /// 修正最近一次提交（`git commit --amend -m <message>`）。
@@ -1175,6 +1214,59 @@ pub fn stash_branch(
 
 /// 变基前备份引用：始终指向最近一次交互式变基开始前的分支头。
 pub const REBASE_BACKUP_REF: &str = "refs/opl-backup/rebase";
+
+/// 危险操作（reset --hard / 丢弃全部 / 安全强推）前的备份引用前缀
+/// （v0.8 / 8.5）：指向操作前的分支头，用户可从命令面板一键恢复。
+pub const DESTRUCTIVE_BACKUP_REF: &str = "refs/opl-backup/pre-destructive";
+
+/// 把当前分支头记录到危险操作备份引用（HEAD 不可用时静默跳过——
+/// 空仓库无可备份内容）。返回备份引用名（已记录时）。
+fn backup_before_destructive(repo: &git2::Repository) -> Option<String> {
+    let head = repo.head().ok()?.peel_to_commit().ok()?;
+    repo.reference(
+        DESTRUCTIVE_BACKUP_REF,
+        head.id(),
+        true,
+        "openpatchline: backup before destructive operation",
+    )
+    .ok()?;
+    Some(DESTRUCTIVE_BACKUP_REF.to_string())
+}
+
+/// 列出全部安全备份引用（refs/opl-backup/*，v0.8 / 8.5 撤销入口数据源）。
+pub fn list_safety_backups(repo: &git2::Repository) -> AppResult<Vec<SafetyBackup>> {
+    let mut out = Vec::new();
+    let refs = repo
+        .references()
+        .map_err(|e| AppError::Git(format!("枚举引用失败: {e}")))?;
+    for r in refs {
+        let reference = r.map_err(|e| AppError::Git(format!("枚举引用失败: {e}")))?;
+        let Ok(name) = reference.name() else { continue };
+        let Some(short) = name.strip_prefix("refs/opl-backup/") else {
+            continue;
+        };
+        let Ok(commit) = reference.peel_to_commit() else {
+            continue;
+        };
+        let id = commit.id().to_string();
+        out.push(SafetyBackup {
+            ref_name: short.to_string(),
+            full_ref: name.to_string(),
+            commit_id: id.clone(),
+            short_id: id.chars().take(7).collect(),
+            summary: commit
+                .message()
+                .unwrap_or_default()
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string(),
+            timestamp: commit.time().seconds(),
+        });
+    }
+    out.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
+    Ok(out)
+}
 
 /// 变基编辑器持久目录（.git/opl-rebase-editor/，review 修复 #2）：
 /// 冲突暂停时 GIT_EDITOR 脚本与说明文件必须存活到 `rebase --continue`

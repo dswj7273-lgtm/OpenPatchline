@@ -1914,3 +1914,151 @@ fn branches_containing_by_ancestry() {
     assert!(containing_c1.iter().any(|n| n == "side"));
     assert_eq!(containing_c1.len(), 2);
 }
+
+/// v0.8 / 8.6 异常场景：浅克隆（shallow）下图分页 / 状态 / diff 均可用。
+#[test]
+fn edge_case_shallow_clone() {
+    let remote_dir = tempfile::tempdir().unwrap();
+    let remote = git2::Repository::init_bare(remote_dir.path()).unwrap();
+    drop(remote);
+    run_cli(remote_dir.path(), &["config", "user.email", "t@t"]);
+    // 在裸远程上无法直接提交——本地工作仓库推送后再浅克隆。
+    let src_dir = tempfile::tempdir().unwrap();
+    let src = git2::Repository::init(src_dir.path()).unwrap();
+    {
+        let mut cfg = src.config().unwrap();
+        cfg.set_str("user.name", "T").unwrap();
+        cfg.set_str("user.email", "t@t").unwrap();
+    }
+    commit_file(&src, "a.txt", "one\n", "c1");
+    commit_file(&src, "a.txt", "one\ntwo\n", "c2");
+    drop(src);
+    run_cli(src_dir.path(), &["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+    run_cli(src_dir.path(), &["push", "-u", "origin", "HEAD"]);
+
+    // --depth 1 浅克隆
+    let clone_root = tempfile::tempdir().unwrap();
+    let clone_path = clone_root.path().join("shallow-clone");
+    run_cli(
+        clone_root.path(),
+        &[
+            "clone",
+            "--depth",
+            "1",
+            &format!("file://{}", remote_dir.path().display()),
+            clone_path.to_str().unwrap(),
+        ],
+    );
+    let clone = git2::Repository::open(&clone_path).unwrap();
+    assert!(clone.is_shallow(), "应为浅克隆");
+
+    // 图分页可用（边界提交无父，不越界）
+    let (page, more) = load_commit_page(&clone, None, 10, None).unwrap();
+    assert_eq!(page.len(), 1, "depth=1 只有一条提交");
+    assert!(!more);
+    // 状态与工作区 diff 正常
+    std::fs::write(clone_path.join("a.txt"), "one\ntwo\ndirty\n").unwrap();
+    let statuses = status(&clone).unwrap();
+    assert_eq!(statuses.len(), 1);
+    let diff = file_diff_workdir(&clone, "a.txt", false).unwrap();
+    assert_eq!(diff.additions, 1);
+}
+
+/// v0.8 / 8.6 异常场景：非 UTF-8（Latin-1）文件 diff 走 lossy 转换不崩溃。
+#[test]
+fn edge_case_non_utf8_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    // 提交合法 UTF-8 基线
+    std::fs::write(dir.path().join("latin.txt"), "caf\u{e9} baseline\n").unwrap();
+    {
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("latin.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree_to(&repo).unwrap()).unwrap();
+        let sig_ = sig();
+        repo.commit(Some("HEAD"), &sig_, &sig_, "init", &tree, &[]).unwrap();
+    }
+    // 工作区写入非法 UTF-8 字节（0xFF 0xFE）
+    std::fs::write(dir.path().join("latin.txt"), b"\xff\xfe garbage\n").unwrap();
+    let diff = file_diff_workdir(&repo, "latin.txt", false).expect("非 UTF-8 diff 不应崩溃");
+    assert!(!diff.is_binary, "无 NUL 字节不应判为二进制");
+    assert_eq!(diff.additions, 1);
+    // 状态 / 暂存可用
+    let mut repo2 = git2::Repository::open(dir.path()).unwrap();
+    stage_file(&mut repo2, "latin.txt").unwrap();
+}
+
+/// v0.8 / 8.6 异常场景：超长嵌套路径（~300 字符）状态与 diff 可用。
+#[test]
+fn edge_case_long_nested_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    let deep: String = (0..20)
+        .map(|i| format!("level-{i:02}-segment"))
+        .collect::<Vec<_>>()
+        .join("/");
+    assert!(deep.len() > 300, "路径应足够长，实际 {}", deep.len());
+    let full = dir.path().join(&deep);
+    std::fs::create_dir_all(&full).unwrap();
+    std::fs::write(full.join("leaf.txt"), "deep\n").unwrap();
+    {
+        let mut index = repo.index().unwrap();
+        index
+            .add_path(Path::new(&format!("{deep}/leaf.txt")))
+            .unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree_to(&repo).unwrap()).unwrap();
+        let sig_ = sig();
+        repo.commit(Some("HEAD"), &sig_, &sig_, "deep init", &tree, &[]).unwrap();
+    }
+    let rel = format!("{deep}/leaf.txt");
+    std::fs::write(full.join("leaf.txt"), "deep changed\n").unwrap();
+    let statuses = status(&repo).unwrap();
+    assert_eq!(statuses[0].path, rel);
+    let diff = file_diff_workdir(&repo, &rel, false).unwrap();
+    assert_eq!(diff.additions, 1);
+}
+
+/// v0.8 / 8.6 异常场景：Git LFS 指针文件按普通文本处理（不崩溃、可 diff）。
+#[test]
+fn edge_case_lfs_pointer_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    let pointer = "version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32bfa8d75fb84e0d1b7fba8d7\nsize 12345\n";
+    std::fs::write(dir.path().join("asset.bin"), pointer).unwrap();
+    {
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("asset.bin")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree_to(&repo).unwrap()).unwrap();
+        let sig_ = sig();
+        repo.commit(Some("HEAD"), &sig_, &sig_, "add lfs pointer", &tree, &[])
+            .unwrap();
+    }
+    std::fs::write(
+        dir.path().join("asset.bin"),
+        pointer.replace("12345", "99999"),
+    )
+    .unwrap();
+    let diff = file_diff_workdir(&repo, "asset.bin", false).unwrap();
+    assert!(!diff.is_binary);
+    assert_eq!(diff.additions, 1);
+    assert_eq!(diff.deletions, 1);
+}
+
+/// 集成测试辅助：跑真实 git CLI（浅克隆等 libgit2 不便构造的场景）。
+fn run_cli(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("执行 git 失败");
+    assert!(
+        out.status.success(),
+        "git {:?} 失败: {}",
+        args,
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

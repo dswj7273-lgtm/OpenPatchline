@@ -151,12 +151,26 @@ pub fn run() {
             commands::list_branches_containing,
             commands::stash_branch,
             commands::interactive_rebase,
-            commands::checkout_file_from
+            commands::checkout_file_from,
+            commands::list_safety_backups,
+            commands::get_diagnostics,
+            commands::reveal_log_file
         ])
         // watcher 需要 AppHandle（emit 事件），在 setup 阶段注册为全局状态；
         // 同时构建原生菜单（快捷键在 macOS 菜单栏可见）并预加载应用设置。
         .setup(|app| {
             app.manage(watcher::RepoWatcher::new(app.handle().clone()));
+            // panic 本地化记录（v0.8 / 8.7）：默认 hook 之外写入应用日志，
+            // 设置页提供"打开日志目录 / 复制诊断信息"入口。
+            if let Ok(log) = logger::log_file(app.handle()) {
+                let default_hook = std::panic::take_hook();
+                std::panic::set_hook(Box::new(move |info| {
+                    let bt = std::backtrace::Backtrace::force_capture();
+                    let msg = format!("{info}\n{bt}");
+                    let _ = logger::append_log(&log, "error", "panic", &msg);
+                    default_hook(info);
+                }));
+            }
             if let Err(e) = build_menu(app.handle()) {
                 eprintln!("[menu] 构建原生菜单失败: {e}");
             }

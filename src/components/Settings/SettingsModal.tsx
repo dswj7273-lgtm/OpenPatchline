@@ -10,6 +10,7 @@ import { KEYBINDINGS, formatKeybinding, type KeybindingSpec } from "../../keyboa
 import { useAppStore } from "../../store/app";
 import type { ThemePreference } from "../../types";
 import { reportError } from "../../utils/errors";
+import { copyText } from "../../utils/clipboard";
 import * as api from "../../api/client";
 import { CloseIcon, FolderIcon, SettingsIcon } from "../Icons";
 import "./SettingsModal.css";
@@ -379,6 +380,37 @@ export function SettingsModal() {
             <div className="settings-about">
               <span className="settings-about__name">OpenPatchline</span>
               <span className="settings-about__version">版本 {APP_VERSION}</span>
+            </div>
+            <div className="settings-about__actions">
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  void api
+                    .revealLogFile()
+                    .catch((e) => useAppStore.setState({ error: reportError("revealLogFile", e) }));
+                }}
+              >
+                打开日志目录
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  void api
+                    .getDiagnostics()
+                    .then(copyText)
+                    .then((ok) => {
+                      if (ok) useAppStore.setState({ notice: "诊断信息已复制" });
+                      else useAppStore.setState({ error: "复制诊断信息失败：剪贴板不可用" });
+                    })
+                    .catch((e) =>
+                      useAppStore.setState({ error: reportError("getDiagnostics", e) }),
+                    );
+                }}
+              >
+                复制诊断信息
+              </button>
             </div>
           </section>
         </div>

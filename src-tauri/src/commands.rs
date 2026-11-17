@@ -40,7 +40,7 @@ use crate::types::{
     DiffLineSelection, DiffPatchAction, DiffScope, DiffScopeKind, FetchResult, FileBlameResult,
     FileDiffResult, FileHistoryEntry, FileStatus, GitActionResult, GitProgressEvent, GraphPage,
     LogFilter, OpenRepositoryOutcome, PullResult, PushResult, RebaseCommitEntry, RebasePlanEntry,
-    RecentRepo, RepoInfo, StashEntry,
+    RecentRepo, SafetyBackup, RepoInfo, StashEntry,
 };
 use crate::watcher::RepoWatcher;
 
@@ -94,8 +94,13 @@ pub async fn pick_and_open_repository(
         } else {
             PathBuf::from(path)
         };
-        match manager.open(&dir) {
-            Ok(repo) => {
+        match manager.open_with_eviction(&dir) {
+            Ok((repo, evicted)) => {
+                // 被淘汰的仓库停止 .git 监听，释放 notify 句柄与防抖线程
+                //（v0.8 / 8.4 长时间切换仓库内存稳定）。
+                for id in &evicted {
+                    watcher.unwatch(id);
+                }
                 // 监听 .git：失败不阻断打开（自动刷新退化为手动刷新）。
                 if let Ok(entry) = manager.entry(&repo.id) {
                     let gitdir = lock_entry(&entry).repo.path().to_path_buf();
@@ -1325,6 +1330,57 @@ pub async fn checkout_file_from(
         let entry = lock_entry(&entry);
         let workdir = workdir_of(&entry.repo)?;
         git_remote::checkout_file_from(&entry.repo, &workdir, &commit_id, &path)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 列出危险操作备份引用（v0.8 / 8.5 撤销入口数据源）。
+#[tauri::command]
+pub async fn list_safety_backups(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+) -> AppResult<Vec<SafetyBackup>> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<Vec<SafetyBackup>> {
+        let entry = lock_entry(&entry);
+        git_remote::list_safety_backups(&entry.repo)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 组装诊断信息（v0.8 / 8.7 设置页"复制诊断信息"）：版本、系统、
+/// git 版本与日志路径，用于问题反馈。
+#[tauri::command]
+pub async fn get_diagnostics(app: tauri::AppHandle) -> AppResult<String> {
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<String> {
+        let log_path = logger::log_file(&app)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|e| format!("（不可用: {e}）"));
+        let git_version = git_remote::git_version().unwrap_or_else(|e| format!("不可用: {e}"));
+        Ok(format!(
+            "OpenPatchline v{}\n系统: {} ({})\ngit: {}\n日志: {}",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            git_version,
+            log_path,
+        ))
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 在 Finder 中定位日志文件（v0.8 / 8.7 设置页入口）。
+#[tauri::command]
+pub async fn reveal_log_file(app: tauri::AppHandle) -> AppResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+        let path = logger::log_file(&app)?;
+        app.opener()
+            .reveal_item_in_dir(path)
+            .map_err(|e| AppError::Io(format!("在 Finder 中定位日志失败: {e}")))
     })
     .await
     .map_err(join_error)?

@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::error::{AppError, AppResult};
@@ -31,9 +32,18 @@ pub struct RepoEntry {
 /// 外层 `Mutex` 只保护表结构（增删查），条目本身的互斥由各自的
 /// `Mutex` 承担，避免不同仓库的命令互相阻塞。
 /// `Clone` 后共享同一张表。
+/// 同时保留的仓库条目上限（v0.8 / 8.4：长时间反复切换仓库时防止
+/// git2 句柄与图状态无限累积；超过后淘汰最久未使用的）。
+pub const MAX_OPEN_REPOS: usize = 8;
+
+/// 表值：条目共享句柄 + 最近使用序号（LRU 淘汰依据）。
+type RepoSlot = (Arc<Mutex<RepoEntry>>, u64);
+
 #[derive(Clone, Default)]
 pub struct RepoManager {
-    repos: Arc<Mutex<HashMap<String, Arc<Mutex<RepoEntry>>>>>,
+    repos: Arc<Mutex<HashMap<String, RepoSlot>>>,
+    /// 单调递增的最近使用序号（跨克隆共享）。
+    used_counter: Arc<AtomicU64>,
 }
 
 impl RepoManager {
@@ -54,6 +64,12 @@ impl RepoManager {
     /// 找不到仓库时返回 [`AppError::NotFound`]（区别于其他 Git 错误，
     /// 命令层据此触发子仓库扫描）。
     pub fn open(&self, path: &Path) -> AppResult<RepoInfo> {
+        self.open_with_eviction(path).map(|(info, _)| info)
+    }
+
+    /// [`open`] 的完整版本：返回 (RepoInfo, 被淘汰的 repo_id 列表)，
+    /// 命令层据此停止对应的 .git 监听（v0.8 / 8.4）。
+    pub fn open_with_eviction(&self, path: &Path) -> AppResult<(RepoInfo, Vec<String>)> {
         let canonical: PathBuf = std::fs::canonicalize(path)
             .map_err(|e| AppError::Io(format!("路径 {} 不存在或无法解析: {e}", path.display())))?;
 
@@ -88,9 +104,11 @@ impl RepoManager {
         let id = root.to_string_lossy().into_owned();
 
         // 快路径：已打开则复用既有条目（并发 open 同一仓库时以后写入者为准）。
-        if let Some(entry) = self.lock_table().get(&id).cloned() {
-            let entry = lock_entry(&entry);
-            return git_service::repo_info(&entry.repo);
+        let used_at = self.used_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some((entry, used)) = self.lock_table().get_mut(&id) {
+            *used = used_at;
+            let entry = lock_entry(entry);
+            return Ok((git_service::repo_info(&entry.repo)?, Vec::new()));
         }
 
         let entry = RepoEntry {
@@ -99,20 +117,42 @@ impl RepoManager {
             graph_generation: 0,
         };
         let info = git_service::repo_info(&entry.repo)?;
-        self.lock_table().insert(id, Arc::new(Mutex::new(entry)));
-        Ok(info)
+        let mut evicted: Vec<String> = Vec::new();
+        {
+            let mut table = self.lock_table();
+            table.insert(id.clone(), (Arc::new(Mutex::new(entry)), used_at));
+            // 淘汰最久未使用的条目（保护刚插入的）。
+            while table.len() > MAX_OPEN_REPOS {
+                let Some(oldest) = table
+                    .iter()
+                    .filter(|(k, _)| **k != id)
+                    .min_by_key(|(_, (_, used))| *used)
+                    .map(|(k, _)| k.clone())
+                else {
+                    break;
+                };
+                table.remove(&oldest);
+                evicted.push(oldest);
+            }
+        }
+        Ok((info, evicted))
     }
 
     /// 按 `repo_id` 取条目共享句柄；未知 id → [`AppError::NotFound`]。
+    /// 同时刷新最近使用序号（LRU）。
     pub fn entry(&self, repo_id: &str) -> AppResult<Arc<Mutex<RepoEntry>>> {
+        let used_at = self.used_counter.fetch_add(1, Ordering::Relaxed) + 1;
         self.lock_table()
-            .get(repo_id)
-            .cloned()
+            .get_mut(repo_id)
+            .map(|(entry, used)| {
+                *used = used_at;
+                entry.clone()
+            })
             .ok_or_else(|| AppError::NotFound(format!("仓库未打开: {repo_id}")))
     }
 
     /// 锁定仓库表（中毒时恢复，见 [`lock_entry`] 的说明）。
-    fn lock_table(&self) -> MutexGuard<'_, HashMap<String, Arc<Mutex<RepoEntry>>>> {
+    fn lock_table(&self) -> MutexGuard<'_, HashMap<String, RepoSlot>> {
         self.repos.lock().unwrap_or_else(|p| p.into_inner())
     }
 }
@@ -199,6 +239,33 @@ mod tests {
                 .entry(dir.path().to_string_lossy().as_ref())
                 .is_err()
         );
+    }
+
+    /// v0.8 / 8.4：超过上限后淘汰最久未使用的仓库，且复用会续期。
+    #[test]
+    fn open_evicts_least_recently_used_beyond_cap() {
+        let manager = RepoManager::new();
+        let mut dirs = Vec::new();
+        let mut first_id = String::new();
+        for i in 0..(MAX_OPEN_REPOS + 2) {
+            let dir = tempfile::tempdir().expect("创建目录失败");
+            git2::Repository::init(dir.path()).expect("init repo");
+            let (info, evicted) = manager
+                .open_with_eviction(dir.path())
+                .expect("打开失败");
+            if i == 0 {
+                first_id = info.id.clone();
+                assert!(evicted.is_empty());
+            }
+            dirs.push(dir); // 保持目录存活
+        }
+        // 第一个仓库应已被淘汰（最久未使用），总数不超过上限。
+        assert!(manager.entry(&first_id).is_err(), "最久未使用的仓库应被淘汰");
+        // 淘汰列表累计长度 = 超出上限的数量。
+        // 重新打开第一个仓库（此时它是最新的），不应淘汰自身。
+        let dir0 = dirs[0].path();
+        let (_, evicted) = manager.open_with_eviction(dir0).expect("重新打开失败");
+        assert!(!evicted.iter().any(|id| id == &first_id));
     }
 
     /// 选中仓库内子目录时向上搜索定位仓库根，且与直接打开根目录复用同一条目。

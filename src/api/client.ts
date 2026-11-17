@@ -169,6 +169,30 @@ export function interactiveRebase(
   return invoke<GitActionResult>("interactive_rebase", { repoId, plan });
 }
 
+/** 列出危险操作备份引用（撤销入口数据源，v0.8 / 8.5）。 */
+export function listSafetyBackups(repoId: string): Promise<
+  Array<{
+    refName: string;
+    fullRef: string;
+    commitId: string;
+    shortId: string;
+    summary: string;
+    timestamp: number;
+  }>
+> {
+  return invoke("list_safety_backups", { repoId });
+}
+
+/** 组装诊断信息文本（v0.8 / 8.7）。 */
+export function getDiagnostics(): Promise<string> {
+  return invoke<string>("get_diagnostics");
+}
+
+/** 在 Finder 中定位日志文件（v0.8 / 8.7）。 */
+export function revealLogFile(): Promise<void> {
+  return invoke<void>("reveal_log_file");
+}
+
 /** 从指定提交恢复单个文件到工作区并暂存（v0.7 / 7.7）。 */
 export function checkoutFileFrom(
   repoId: string,
