@@ -130,7 +130,7 @@ fn integration_conflict_diff_resolve_abort_and_continue() {
     assert!(statuses[0].conflicted);
 
     // 工作区 diff 应包含冲突标记，供用户排查
-    let diff = git_service::file_diff_workdir(&repo, "conflict.txt").unwrap();
+    let diff = git_service::file_diff_workdir(&repo, "conflict.txt", false).unwrap();
     let joined: String = diff
         .rows
         .iter()
@@ -167,14 +167,14 @@ fn integration_rename_detection_across_scopes() {
         tmp.path().join("new_name.txt"),
     )
     .unwrap();
-    let wdiff = git_service::file_diff_workdir(&repo, "old_name.txt").unwrap();
+    let wdiff = git_service::file_diff_workdir(&repo, "old_name.txt", false).unwrap();
     assert_eq!(wdiff.change_type, ChangeType::Renamed);
     assert_eq!(wdiff.old_path.as_deref(), Some("old_name.txt"));
     assert_eq!(wdiff.new_path.as_deref(), Some("new_name.txt"));
 
     // 2. 暂存区重命名
     run_git(tmp.path(), &["add", "-A"]);
-    let sdiff = git_service::file_diff_staged(&repo, "old_name.txt").unwrap();
+    let sdiff = git_service::file_diff_staged(&repo, "old_name.txt", false).unwrap();
     assert_eq!(sdiff.change_type, ChangeType::Renamed);
     assert_eq!(sdiff.old_path.as_deref(), Some("old_name.txt"));
     assert_eq!(sdiff.new_path.as_deref(), Some("new_name.txt"));
@@ -233,7 +233,7 @@ fn integration_submodule_repository_operations() {
 
     // 对 gitlink 条目查 diff 应优雅处理为非 blob（空内容）而不报错
     let _gitlink_diff =
-        git_service::file_diff_commit(&entry.repo, &sub_commit, "deps/sub").unwrap();
+        git_service::file_diff_commit(&entry.repo, &sub_commit, "deps/sub", false).unwrap();
     let statuses = git_service::status(&entry.repo).unwrap();
     assert!(statuses.is_empty(), "提交后子模块工作区应干净");
 }

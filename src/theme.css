@@ -75,6 +75,12 @@
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
   --font-code: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
 
+  /* 代码区字号 / 行高 / Tab 宽度（设置页可调；行高由 JS 同步写入，
+     与虚拟滚动的 codeRowHeight 保持一致，勿单独修改其一） */
+  --code-size: 13px;
+  --code-row-h: 20px;
+  --code-tab-size: 4;
+
   /* 字号 */
   --text-xs: 11px;
   --text-sm: 12px;

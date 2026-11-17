@@ -28,4 +28,11 @@ export default tseslint.config(
       "no-empty": ["error", { allowEmptyCatch: false }],
     },
   },
+  {
+    // Node 环境脚本（版本号提升等）
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
 );

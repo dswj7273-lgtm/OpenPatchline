@@ -22,6 +22,7 @@ export const createLogSlice: AppSlice<LogSlice> = (set, get) => {
     hasMore: false,
     graphLoading: false,
     logFilter: EMPTY_LOG_FILTER,
+    searchFocusTick: 0,
     selectedCommitId: null,
     commitFiles: [],
     commitSignature: null,
@@ -255,6 +256,10 @@ export const createLogSlice: AppSlice<LogSlice> = (set, get) => {
     setLogFilter: (f) => {
       set({ logFilter: f });
       void get().reloadGraph();
+    },
+
+    focusSearch: () => {
+      set((s) => ({ searchFocusTick: s.searchFocusTick + 1 }));
     },
   };
 };

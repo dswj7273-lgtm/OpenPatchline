@@ -20,7 +20,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::error::{AppError, AppResult};
@@ -38,6 +38,26 @@ const FALLBACK_SIGNATURE_EMAIL: &str = "openpatchline@local";
 /// git 可执行文件候选：GUI 进程（从 Finder/Dock 启动）不继承 shell 的
 /// PATH，Homebrew 安装的 git 可能不在默认 PATH 里；依次回退常见位置。
 const GIT_BIN_CANDIDATES: &[&str] = &["git", "/opt/homebrew/bin/git", "/usr/local/bin/git"];
+
+/// 用户在设置中覆盖的 git 可执行文件路径（docs/11 §三 6.2）；
+/// 配置后优先于候选列表使用，路径无效时如实报错而不是静默回退。
+static GIT_BIN_OVERRIDE: RwLock<Option<String>> = RwLock::new(None);
+
+/// 更新 git 可执行文件覆盖路径；空串等价于清除覆盖。
+pub fn set_git_bin_override(path: Option<&str>) {
+    let normalized = path
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if let Ok(mut guard) = GIT_BIN_OVERRIDE.write() {
+        *guard = normalized;
+    }
+}
+
+/// 读取当前生效的 git 可执行文件覆盖路径（设置页展示用）。
+pub fn git_bin_override() -> Option<String> {
+    GIT_BIN_OVERRIDE.read().ok().and_then(|g| g.clone())
+}
 
 static NEXT_OP_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -169,6 +189,31 @@ fn spawn_git_command_with_stdin(
     args: &[&str],
     pipe_stdin: bool,
 ) -> AppResult<Child> {
+    if let Some(bin) = git_bin_override() {
+        let mut cmd = Command::new(&bin);
+        cmd.current_dir(workdir)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_EDITOR", "true")
+            .stdin(if pipe_stdin {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        return match cmd.spawn() {
+            Ok(child) => Ok(child),
+            Err(e) => Err(AppError::Io(format!(
+                "无法启动设置中指定的 git 可执行文件 {bin}: {e}；请在设置中修正 Git 路径"
+            ))),
+        };
+    }
     for bin in GIT_BIN_CANDIDATES {
         let mut cmd = Command::new(bin);
         cmd.current_dir(workdir)

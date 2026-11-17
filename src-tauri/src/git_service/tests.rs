@@ -147,7 +147,7 @@ fn changed_files_modified_counts() {
 #[test]
 fn file_diff_commit_rows() {
     let (_dir, repo, c2) = modified_repo();
-    let result = file_diff_commit(&repo, &c2, "a.txt").expect("file_diff_commit 失败");
+    let result = file_diff_commit(&repo, &c2, "a.txt", false).expect("file_diff_commit 失败");
     assert!(!result.is_binary);
     assert!(!result.too_large);
     assert!(matches!(result.change_type, ChangeType::Modified));
@@ -331,7 +331,7 @@ fn file_diff_commit_renamed() {
     assert_eq!(files[0].old_path.as_deref(), Some("a.txt"));
     assert!(matches!(files[0].change_type, ChangeType::Renamed));
 
-    let d = file_diff_commit(&repo, &c2, "b.txt").expect("file_diff_commit 失败");
+    let d = file_diff_commit(&repo, &c2, "b.txt", false).expect("file_diff_commit 失败");
     assert!(
         matches!(d.change_type, ChangeType::Renamed),
         "应为 Renamed，实际 {:?}",
@@ -346,7 +346,7 @@ fn file_diff_commit_renamed() {
     );
 
     // 按旧路径查询也应定位到同一配对。
-    let d_old = file_diff_commit(&repo, &c2, "a.txt").expect("file_diff_commit(旧路径) 失败");
+    let d_old = file_diff_commit(&repo, &c2, "a.txt", false).expect("file_diff_commit(旧路径) 失败");
     assert!(matches!(d_old.change_type, ChangeType::Renamed));
     assert_eq!(d_old.new_path.as_deref(), Some("b.txt"));
 }
@@ -375,7 +375,7 @@ fn file_diff_staged_renamed() {
     let entry = find_status(&statuses, "a.txt").expect("a.txt 应按旧路径上报暂存重命名");
     assert!(matches!(entry.staged, Some(ChangeType::Renamed)));
 
-    let d = file_diff_staged(&repo, "a.txt").expect("file_diff_staged 失败");
+    let d = file_diff_staged(&repo, "a.txt", false).expect("file_diff_staged 失败");
     assert!(
         matches!(d.change_type, ChangeType::Renamed),
         "应为 Renamed，实际 {:?}",
@@ -408,7 +408,7 @@ fn file_diff_workdir_renamed() {
     let entry = find_status(&statuses, "a.txt").expect("a.txt 应按旧路径上报未暂存重命名");
     assert!(matches!(entry.unstaged, Some(ChangeType::Renamed)));
 
-    let d = file_diff_workdir(&repo, "a.txt").expect("file_diff_workdir 失败");
+    let d = file_diff_workdir(&repo, "a.txt", false).expect("file_diff_workdir 失败");
     assert!(
         matches!(d.change_type, ChangeType::Renamed),
         "应为 Renamed，实际 {:?}",
@@ -431,7 +431,7 @@ fn file_diff_workdir_plain_cases() {
 
     // 修改。
     std::fs::write(repo.workdir().expect("工作区").join("a.txt"), "v2\n").expect("写入失败");
-    let d = file_diff_workdir(&repo, "a.txt").expect("modified diff 失败");
+    let d = file_diff_workdir(&repo, "a.txt", false).expect("modified diff 失败");
     assert!(matches!(d.change_type, ChangeType::Modified));
     assert_eq!((d.additions, d.deletions), (1, 1));
     assert_eq!(d.old_path.as_deref(), Some("a.txt"));
@@ -439,20 +439,20 @@ fn file_diff_workdir_plain_cases() {
 
     // untracked：整体 Added。
     std::fs::write(repo.workdir().expect("工作区").join("new.txt"), "n\n").expect("写入失败");
-    let d = file_diff_workdir(&repo, "new.txt").expect("untracked diff 失败");
+    let d = file_diff_workdir(&repo, "new.txt", false).expect("untracked diff 失败");
     assert!(matches!(d.change_type, ChangeType::Added));
     assert_eq!((d.additions, d.deletions), (1, 0));
 
     // 删除。
     std::fs::remove_file(repo.workdir().expect("工作区").join("a.txt")).expect("删除失败");
-    let d = file_diff_workdir(&repo, "a.txt").expect("deleted diff 失败");
+    let d = file_diff_workdir(&repo, "a.txt", false).expect("deleted diff 失败");
     assert!(matches!(d.change_type, ChangeType::Deleted));
     assert_eq!((d.additions, d.deletions), (0, 1));
 
     // 干净文件：无工作区变更，返回无增删的 Modified diff。
     let (_dir2, repo2) = init_repo();
     commit_file(&repo2, "a.txt", "v1\n", "initial");
-    let d = file_diff_workdir(&repo2, "a.txt").expect("clean diff 失败");
+    let d = file_diff_workdir(&repo2, "a.txt", false).expect("clean diff 失败");
     assert!(matches!(d.change_type, ChangeType::Modified));
     assert_eq!((d.additions, d.deletions), (0, 0));
 }
@@ -957,7 +957,7 @@ fn partial_hunk_and_line_stage_unstage_discard() {
     let edited = "line1\nline2_mod\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10_a\nline10_b\nline12\n";
     std::fs::write(dir.path().join("sample.txt"), edited).unwrap();
 
-    let w_diff = file_diff_workdir(&repo, "sample.txt").unwrap();
+    let w_diff = file_diff_workdir(&repo, "sample.txt", false).unwrap();
     let h1_idx = *w_diff.change_row_indices.first().unwrap();
     assert_eq!(h1_idx, 1);
 
@@ -971,6 +971,7 @@ fn partial_hunk_and_line_stage_unstage_discard() {
             row_index: h1_idx,
             side: PatchSide::Both,
         }],
+    false,
     )
     .unwrap();
 
@@ -980,7 +981,7 @@ fn partial_hunk_and_line_stage_unstage_discard() {
     assert!(!staged_text.contains("line10_a\n"));
 
     // 2) 在剩余 workdir diff 中，只选中第 10_b 行的 Added 侧（行级精选），不暂存 10_a 与删除的 line10/11
-    let w_diff2 = file_diff_workdir(&repo, "sample.txt").unwrap();
+    let w_diff2 = file_diff_workdir(&repo, "sample.txt", false).unwrap();
     let row_10b = w_diff2
         .rows
         .iter()
@@ -995,6 +996,7 @@ fn partial_hunk_and_line_stage_unstage_discard() {
             row_index: row_10b,
             side: PatchSide::New,
         }],
+    false,
     )
     .unwrap();
 
@@ -1003,7 +1005,7 @@ fn partial_hunk_and_line_stage_unstage_discard() {
     assert!(!staged_after_line.contains("line10_a\n"));
 
     // 3) 在暂存区中取消暂存第 1 处修改（line2 -> line2_mod）
-    let s_diff = file_diff_staged(&repo, "sample.txt").unwrap();
+    let s_diff = file_diff_staged(&repo, "sample.txt", false).unwrap();
     apply_diff_selection(
         &mut repo,
         &staged_scope(),
@@ -1013,6 +1015,7 @@ fn partial_hunk_and_line_stage_unstage_discard() {
             row_index: 1,
             side: PatchSide::Both,
         }],
+    false,
     )
     .unwrap();
     let staged_after_unstage = index_blob_text(&repo, "sample.txt").unwrap();
@@ -1021,7 +1024,7 @@ fn partial_hunk_and_line_stage_unstage_discard() {
     assert_eq!(s_diff.rows[1].left.as_ref().unwrap().content, "line2");
 
     // 4) 在 workdir 中丢弃 line2_mod 的更改，保留其他修改
-    let w_diff3 = file_diff_workdir(&repo, "sample.txt").unwrap();
+    let w_diff3 = file_diff_workdir(&repo, "sample.txt", false).unwrap();
     let row_l2 = w_diff3
         .rows
         .iter()
@@ -1036,6 +1039,7 @@ fn partial_hunk_and_line_stage_unstage_discard() {
             row_index: row_l2,
             side: PatchSide::Both,
         }],
+    false,
     )
     .unwrap();
     let disk_after_discard = std::fs::read_to_string(dir.path().join("sample.txt")).unwrap();
@@ -1055,7 +1059,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
         .unwrap();
     commit_file(&repo, "crlf.txt", "a\r\nb\r\nc\r\n", "crlf init");
     std::fs::write(dir.path().join("crlf.txt"), "a\r\nb2\r\nc\r\n").unwrap();
-    let diff_crlf = file_diff_workdir(&repo, "crlf.txt").unwrap();
+    let diff_crlf = file_diff_workdir(&repo, "crlf.txt", false).unwrap();
     apply_diff_selection(
         &mut repo,
         &workdir_scope(),
@@ -1065,6 +1069,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
             row_index: diff_crlf.change_row_indices[0],
             side: PatchSide::Both,
         }],
+    false,
     )
     .unwrap();
     assert_eq!(
@@ -1075,7 +1080,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
     // 2) 无 EOF 换行符（去掉再恢复）
     commit_file(&repo, "noeol.txt", "hello\nworld", "noeol init");
     std::fs::write(dir.path().join("noeol.txt"), "hello\nworld\n").unwrap();
-    let diff_nl = file_diff_workdir(&repo, "noeol.txt").unwrap();
+    let diff_nl = file_diff_workdir(&repo, "noeol.txt", false).unwrap();
     apply_diff_selection(
         &mut repo,
         &workdir_scope(),
@@ -1085,13 +1090,14 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
             row_index: diff_nl.change_row_indices[0],
             side: PatchSide::Both,
         }],
+    false,
     )
     .unwrap();
     assert_eq!(
         index_blob_text(&repo, "noeol.txt").as_deref(),
         Some("hello\nworld\n")
     );
-    let s_nl = file_diff_staged(&repo, "noeol.txt").unwrap();
+    let s_nl = file_diff_staged(&repo, "noeol.txt", false).unwrap();
     apply_diff_selection(
         &mut repo,
         &staged_scope(),
@@ -1101,6 +1107,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
             row_index: s_nl.change_row_indices[0],
             side: PatchSide::Both,
         }],
+    false,
     )
     .unwrap();
     assert_eq!(
@@ -1119,6 +1126,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
             row_index: 1,
             side: PatchSide::New,
         }],
+    false,
     )
     .unwrap();
     assert_eq!(
@@ -1132,7 +1140,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
     assert_eq!(nf.unstaged, Some(ChangeType::Modified));
 
     // 只丢弃未跟踪新增文件的 first 行
-    let nf_diff = file_diff_workdir(&repo, "new_file.txt").unwrap();
+    let nf_diff = file_diff_workdir(&repo, "new_file.txt", false).unwrap();
     let row_first = nf_diff
         .rows
         .iter()
@@ -1147,6 +1155,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
             row_index: row_first,
             side: PatchSide::New,
         }],
+    false,
     )
     .unwrap();
     assert_eq!(
@@ -1163,7 +1172,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
         .replace("r_line_9\n", "r_line_9_edit\n");
     std::fs::write(dir.path().join("new_name.txt"), &renamed_content).unwrap();
 
-    let ren_diff = file_diff_workdir(&repo, "new_name.txt").unwrap();
+    let ren_diff = file_diff_workdir(&repo, "new_name.txt", false).unwrap();
     assert_eq!(ren_diff.change_type, ChangeType::Renamed);
     let r2_row = ren_diff.change_row_indices[0];
     apply_diff_selection(
@@ -1175,6 +1184,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
             row_index: r2_row,
             side: PatchSide::Both,
         }],
+    false,
     )
     .unwrap();
     assert!(index_blob_text(&repo, "old_name.txt").is_none());
@@ -1199,6 +1209,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
                 row_index: 0,
                 side: PatchSide::Both,
             }],
+        false,
         )
         .is_err()
     );
@@ -1212,6 +1223,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
                 row_index: 9999,
                 side: PatchSide::Both,
             }],
+        false,
         )
         .is_err()
     );
@@ -1242,11 +1254,11 @@ fn range_diff_commits_and_branches() {
             .any(|f| f.path == "b.txt" && f.change_type == ChangeType::Added)
     );
 
-    let diff_b = file_diff_range(&repo, "feature", "HEAD", "b.txt").unwrap();
+    let diff_b = file_diff_range(&repo, "feature", "HEAD", "b.txt", false).unwrap();
     assert_eq!(diff_b.change_type, ChangeType::Added);
     assert_eq!(diff_b.additions, 1);
 
-    let diff_a = file_diff_range(&repo, &c1, &c2, "a.txt").unwrap();
+    let diff_a = file_diff_range(&repo, &c1, &c2, "a.txt", false).unwrap();
     assert_eq!(diff_a.additions, 1);
     assert!(changed_files_range(&repo, "", "HEAD").is_err());
     assert!(changed_files_range(&repo, "no_such_branch", "HEAD").is_err());
@@ -1397,7 +1409,7 @@ fn diff_and_stage_reject_path_traversal_and_symlinks() {
     // 1) 非法路径 / 越界相对路径一律拦截
     for bad in ["../secret.txt", "/etc/passwd", ".", ""] {
         assert!(
-            matches!(file_diff_workdir(&repo, bad), Err(AppError::InvalidArg(_))),
+            matches!(file_diff_workdir(&repo, bad, false), Err(AppError::InvalidArg(_))),
             "file_diff_workdir 应拦截 {bad}"
         );
         assert!(
@@ -1412,7 +1424,7 @@ fn diff_and_stage_reject_path_traversal_and_symlinks() {
 
     // 2) 未变更的未跟踪目录或不存在的文件不再回退去任意读取工作区磁盘
     assert!(matches!(
-        file_diff_workdir(&repo, "nonexistent.txt"),
+        file_diff_workdir(&repo, "nonexistent.txt", false),
         Err(AppError::NotFound(_))
     ));
 
@@ -1423,7 +1435,7 @@ fn diff_and_stage_reject_path_traversal_and_symlinks() {
         // 目录符号链接指向仓库外：访问 escape_dir/secret.txt 必须被拦截
         symlink(outside.path(), workdir.join("escape_dir")).unwrap();
         assert!(matches!(
-            file_diff_workdir(&repo, "escape_dir/secret.txt"),
+            file_diff_workdir(&repo, "escape_dir/secret.txt", false),
             Err(AppError::InvalidArg(_))
         ));
         assert!(matches!(
@@ -1434,7 +1446,7 @@ fn diff_and_stage_reject_path_traversal_and_symlinks() {
         // 文件符号链接指向仓库外：读取工作区 diff 仅呈现符号链接目标字符串，绝不解引用外部文件内容
         symlink(&secret, workdir.join("leak.link")).unwrap();
         let link_diff =
-            file_diff_workdir(&repo, "leak.link").expect("符号链接 diff 应仅读 link target");
+            file_diff_workdir(&repo, "leak.link", false).expect("符号链接 diff 应仅读 link target");
         let joined: String = link_diff
             .rows
             .iter()

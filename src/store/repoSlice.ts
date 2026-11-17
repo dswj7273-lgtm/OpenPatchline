@@ -4,19 +4,12 @@
 
 import * as api from "../api/client";
 import { loadCommitHistory } from "../utils/commitHelpers";
-import {
-  persistTheme,
-  readInitialTheme,
-  reportError,
-  type AppSlice,
-  type RepoSlice,
-} from "./types";
+import { reportError, type AppSlice, type RepoSlice } from "./types";
 
 export const createRepoSlice: AppSlice<RepoSlice> = (set, get) => ({
   repo: null,
   recentRepos: [],
   repoCandidates: null,
-  theme: readInitialTheme(),
   error: null,
   notice: null,
 
@@ -112,9 +105,4 @@ export const createRepoSlice: AppSlice<RepoSlice> = (set, get) => ({
   dismissRepoCandidates: () => set({ repoCandidates: null }),
   dismissNotice: () => set({ notice: null }),
   clearError: () => set({ error: null }),
-
-  setTheme: (t) => {
-    persistTheme(t);
-    set({ theme: t });
-  },
 });

@@ -376,8 +376,9 @@
 .conflict-code,
 .conflict-plain-block {
   font-family: var(--font-code);
-  font-size: 12px;
-  line-height: 20px;
+  font-size: calc(var(--code-size, 13px) - 1px);
+  line-height: var(--code-row-h, 20px);
+  tab-size: var(--code-tab-size, 4);
 }
 
 .conflict-code-row {
@@ -414,7 +415,7 @@
   color: var(--text-primary);
   font-family: var(--font-code);
   font-size: 12px;
-  line-height: 20px;
+  line-height: var(--code-row-h, 20px);
   tab-size: 4;
 }
 

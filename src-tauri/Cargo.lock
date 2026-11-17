@@ -2473,7 +2473,7 @@ dependencies = [
 
 [[package]]
 name = "openpatchline"
-version = "0.1.0"
+version = "0.6.0"
 dependencies = [
  "git2",
  "notify",

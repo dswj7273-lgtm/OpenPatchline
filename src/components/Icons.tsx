@@ -431,3 +431,42 @@ export function CodeIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/** 设置（齿轮）。 */
+export function SettingsIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="8" cy="8" r="2.1" />
+      <path d="M8 1.8a6.2 6.2 0 0 1 1.9.3l.4 1.7 1.5.9 1.7-.5a6.3 6.3 0 0 1 .9 1.6l-1.2 1.2v1.8l1.2 1.2a6.3 6.3 0 0 1-.9 1.6l-1.7-.5-1.5.9-.4 1.7a6.2 6.2 0 0 1-3.8 0l-.4-1.7-1.5-.9-1.7.5a6.3 6.3 0 0 1-.9-1.6l1.2-1.2V6.5L1.6 5.3a6.3 6.3 0 0 1 .9-1.6l1.7.5 1.5-.9.4-1.7A6.2 6.2 0 0 1 8 1.8Z" />
+    </Icon>
+  );
+}
+
+/** 命令面板。 */
+export function CommandIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M5.5 2.5a2 2 0 1 0 0 4h5a2 2 0 1 0 0-4 2 2 0 0 0-2 2v3a2 2 0 1 1-1 0v-3a2 2 0 0 0-2-2Z" />
+      <path d="M5.5 9.5h5M8 6.5v3" />
+    </Icon>
+  );
+}
+
+/** 在外部编辑器打开。 */
+export function ExternalLinkIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M6.5 3H4a1.5 1.5 0 0 0-1.5 1.5V12A1.5 1.5 0 0 0 4 13.5h7.5A1.5 1.5 0 0 0 13 12V9.5" />
+      <path d="M9 2.5h4.5V7M13.5 2.5 8 8" />
+    </Icon>
+  );
+}
+
+/** 文件夹 / Finder 定位。 */
+export function FolderIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M2 4.25A1.25 1.25 0 0 1 3.25 3H6l1.25 1.5h5.5A1.25 1.25 0 0 1 14 5.75v6A1.25 1.25 0 0 1 12.75 13h-9.5A1.25 1.25 0 0 1 2 11.75v-7.5Z" />
+    </Icon>
+  );
+}

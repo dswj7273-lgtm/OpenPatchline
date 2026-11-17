@@ -247,8 +247,9 @@
   min-width: max-content;
   padding-right: 16px;
   font-family: var(--font-code);
-  font-size: 12px;
-  line-height: 20px;
+  /* 比代码区基准小 1px，随设置字号联动缩放 */
+  font-size: calc(var(--code-size, 13px) - 1px);
+  line-height: var(--code-row-h, 20px);
 }
 
 .blame-row:hover {

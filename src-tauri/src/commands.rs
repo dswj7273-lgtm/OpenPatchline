@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use tauri::{Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::app_config::{self, AppConfig};
 use crate::error::{AppError, AppResult};
 use crate::git_remote::{self, RemoteOpManager, RemoteProgress};
 use crate::git_service;
@@ -48,6 +49,14 @@ const GIT_REMOTE_PROGRESS_EVENT: &str = "git_remote_progress";
 
 /// 提交图默认分页大小（调用方未显式传 limit 时）。
 const DEFAULT_GRAPH_PAGE_SIZE: usize = 200;
+
+/// `get_app_config` 返回载荷：设置本体 + 是否首次运行（尚未持久化过设置）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppConfigPayload {
+    pub config: AppConfig,
+    pub fresh: bool,
+}
 
 /// 把后台任务 join 失败（panic / 取消）规整为 `AppError::Unexpected`。
 fn join_error(err: tauri::Error) -> AppError {
@@ -273,12 +282,15 @@ pub async fn get_range_files(
 }
 
 /// 按 `scope`（提交 / 范围对比 / 暂存区 / 工作区）计算单个文件的左右分栏 diff。
+/// `ignore_whitespace`：比较时忽略空白差异（与局部补丁应用共用同一选项，
+/// 保证选区行下标在视图与应用两侧一致）。
 #[tauri::command]
 pub async fn get_file_diff(
     state: State<'_, RepoManager>,
     repo_id: String,
     scope: DiffScope,
     path: String,
+    ignore_whitespace: Option<bool>,
 ) -> AppResult<FileDiffResult> {
     git_service::validate_rel_path(&path)?;
     // commit / range 范围必须提供对应引用（提前校验，避免后台任务白跑）。
@@ -303,6 +315,7 @@ pub async fn get_file_diff(
             "scope.kind 为 range 时必须提供 baseRef 与 targetRef".to_string(),
         ));
     }
+    let ignore_ws = ignore_whitespace.unwrap_or(false);
     let entry = state.inner().clone().entry(&repo_id)?;
     tauri::async_runtime::spawn_blocking(move || -> AppResult<FileDiffResult> {
         let entry = lock_entry(&entry);
@@ -311,15 +324,17 @@ pub async fn get_file_diff(
                 &entry.repo,
                 scope.commit_id.as_deref().unwrap_or_default(),
                 &path,
+                ignore_ws,
             ),
             DiffScopeKind::Range => git_service::file_diff_range(
                 &entry.repo,
                 scope.base_ref.as_deref().unwrap_or_default(),
                 scope.target_ref.as_deref().unwrap_or_default(),
                 &path,
+                ignore_ws,
             ),
-            DiffScopeKind::Staged => git_service::file_diff_staged(&entry.repo, &path),
-            DiffScopeKind::Workdir => git_service::file_diff_workdir(&entry.repo, &path),
+            DiffScopeKind::Staged => git_service::file_diff_staged(&entry.repo, &path, ignore_ws),
+            DiffScopeKind::Workdir => git_service::file_diff_workdir(&entry.repo, &path, ignore_ws),
         }
     })
     .await
@@ -335,15 +350,24 @@ pub async fn apply_diff_selection(
     path: String,
     action: DiffPatchAction,
     selections: Vec<DiffLineSelection>,
+    ignore_whitespace: Option<bool>,
 ) -> AppResult<()> {
     git_service::validate_rel_path(&path)?;
     if selections.is_empty() {
         return Err(AppError::InvalidArg("选区不能为空".to_string()));
     }
+    let ignore_ws = ignore_whitespace.unwrap_or(false);
     let entry = state.inner().clone().entry(&repo_id)?;
     tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
         let mut entry = lock_entry(&entry);
-        git_service::apply_diff_selection(&mut entry.repo, &scope, &path, action, &selections)
+        git_service::apply_diff_selection(
+            &mut entry.repo,
+            &scope,
+            &path,
+            action,
+            &selections,
+            ignore_ws,
+        )
     })
     .await
     .map_err(join_error)?
@@ -1070,6 +1094,36 @@ pub async fn get_file_blame(
     tauri::async_runtime::spawn_blocking(move || -> AppResult<FileBlameResult> {
         let entry = lock_entry(&entry);
         git_service::file_blame(&entry.repo, &path, commit_id.as_deref())
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 读取应用设置（文件缺失或损坏时返回默认值；fresh 标记首次运行供前端迁移旧偏好）。
+#[tauri::command]
+pub async fn get_app_config(app: tauri::AppHandle) -> AppResult<AppConfigPayload> {
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<AppConfigPayload> {
+        let file = app_config::app_config_file(&app)?;
+        let (config, fresh) = app_config::load_app_config(&file)?;
+        Ok(AppConfigPayload { config, fresh })
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 保存应用设置：规整取值后原子写入，并即时应用 git 可执行路径覆盖；
+/// 返回落盘后的最终配置（供前端回显规整结果）。
+#[tauri::command]
+pub async fn set_app_config(
+    app: tauri::AppHandle,
+    config: AppConfig,
+) -> AppResult<AppConfig> {
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<AppConfig> {
+        let config = config.normalized();
+        let file = app_config::app_config_file(&app)?;
+        app_config::save_app_config(&file, &config)?;
+        git_remote::set_git_bin_override(config.git_executable_path.as_deref());
+        Ok(config)
     })
     .await
     .map_err(join_error)?

@@ -111,6 +111,7 @@ pub fn file_diff_commit(
     repo: &git2::Repository,
     commit_id: &str,
     path: &str,
+    ignore_ws: bool,
 ) -> AppResult<FileDiffResult> {
     validate_rel_path(path)?;
     let commit = find_commit(repo, commit_id)?;
@@ -118,7 +119,7 @@ pub fn file_diff_commit(
         .tree()
         .map_err(|e| AppError::Git(format!("读取提交树失败: {e}")))?;
     let parent_tree = first_parent_tree(&commit)?;
-    file_diff_between_trees(repo, parent_tree.as_ref(), Some(&new_tree), path, "该提交")
+    file_diff_between_trees(repo, parent_tree.as_ref(), Some(&new_tree), path, "该提交", ignore_ws)
 }
 
 /// 两个提交或引用之间单个文件的左右分栏 diff（`base_ref` → `target_ref`）。
@@ -127,6 +128,7 @@ pub fn file_diff_range(
     base_ref: &str,
     target_ref: &str,
     path: &str,
+    ignore_ws: bool,
 ) -> AppResult<FileDiffResult> {
     validate_rel_path(path)?;
     let base_tree = resolve_tree(repo, base_ref)?;
@@ -137,6 +139,7 @@ pub fn file_diff_range(
         Some(&target_tree),
         path,
         &format!("{base_ref}..{target_ref}"),
+        ignore_ws,
     )
 }
 
@@ -146,6 +149,7 @@ fn file_diff_between_trees(
     new_tree: Option<&git2::Tree<'_>>,
     path: &str,
     scope_label: &str,
+    ignore_ws: bool,
 ) -> AppResult<FileDiffResult> {
     let (status, old_path, new_path) =
         tree_delta_info(repo, old_tree, new_tree, path, scope_label)?;
@@ -160,11 +164,15 @@ fn file_diff_between_trees(
         blob_bytes_from_tree(repo, new_tree, new_path.as_deref().unwrap_or(path))?
     };
     let change_type = delta_change_type(status).unwrap_or(ChangeType::Modified);
-    Ok(build_file_diff(old, new, old_path, new_path, change_type))
+    Ok(build_file_diff(old, new, old_path, new_path, change_type, ignore_ws))
 }
 
 /// 暂存区中单个文件的 diff：HEAD blob vs index blob。
-pub fn file_diff_staged(repo: &git2::Repository, path: &str) -> AppResult<FileDiffResult> {
+pub fn file_diff_staged(
+    repo: &git2::Repository,
+    path: &str,
+    ignore_ws: bool,
+) -> AppResult<FileDiffResult> {
     validate_rel_path(path)?;
     let head_tree = head_tree(repo)?;
     let index = fresh_index(repo)?;
@@ -196,11 +204,15 @@ pub fn file_diff_staged(repo: &git2::Repository, path: &str) -> AppResult<FileDi
         blob_bytes_from_index(repo, &index, new_path.as_deref().unwrap_or(path))?
     };
     let change_type = delta_change_type(status).unwrap_or(ChangeType::Modified);
-    Ok(build_file_diff(old, new, old_path, new_path, change_type))
+    Ok(build_file_diff(old, new, old_path, new_path, change_type, ignore_ws))
 }
 
 /// 工作区中单个文件的 diff：index blob（不在 index 则取 HEAD）vs 工作区文件字节。
-pub fn file_diff_workdir(repo: &git2::Repository, path: &str) -> AppResult<FileDiffResult> {
+pub fn file_diff_workdir(
+    repo: &git2::Repository,
+    path: &str,
+    ignore_ws: bool,
+) -> AppResult<FileDiffResult> {
     let rel = validate_rel_path(path)?;
     let workdir = repo
         .workdir()
@@ -257,7 +269,7 @@ pub fn file_diff_workdir(repo: &git2::Repository, path: &str) -> AppResult<FileD
             _ => ChangeType::Modified,
         },
     };
-    Ok(build_file_diff(old, new, old_path, new_path, change_type))
+    Ok(build_file_diff(old, new, old_path, new_path, change_type, ignore_ws))
 }
 
 fn first_parent_tree<'r>(commit: &git2::Commit<'r>) -> AppResult<Option<git2::Tree<'r>>> {
@@ -388,6 +400,7 @@ fn build_file_diff(
     old_path: Option<String>,
     new_path: Option<String>,
     change_type: ChangeType,
+    ignore_ws: bool,
 ) -> FileDiffResult {
     if old.as_deref().is_some_and(is_binary_bytes) || new.as_deref().is_some_and(is_binary_bytes) {
         return FileDiffResult {
@@ -425,7 +438,14 @@ fn build_file_diff(
 
     let old_str = old_text.as_deref().unwrap_or_default();
     let new_str = new_text.as_deref().unwrap_or_default();
-    let rows = diff_engine::diff_strings(old_str, new_str, &TextDiffOptions::default());
+    let rows = diff_engine::diff_strings(
+        old_str,
+        new_str,
+        &TextDiffOptions {
+            ignore_whitespace: ignore_ws,
+            ..TextDiffOptions::default()
+        },
+    );
     let change_row_indices = diff_engine::compute_change_row_indices(&rows);
     let (additions, deletions) = diff_engine::compute_stats(&rows);
     FileDiffResult {

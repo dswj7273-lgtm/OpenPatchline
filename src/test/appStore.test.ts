@@ -62,6 +62,20 @@ vi.mock("../api/client", () => ({
   getFileBlame: vi.fn(),
   logClientError: vi.fn(async () => {}),
   getLogFilePath: vi.fn(async () => "/tmp/openpatchline.log"),
+  getAppSettings: vi.fn(async () => ({
+    config: {
+      theme: "system",
+      codeFontFamily: "",
+      codeFontSize: 13,
+      tabWidth: 4,
+      defaultDiffMode: "split",
+      ignoreWhitespaceDefault: false,
+      externalEditorCommand: null,
+      gitExecutablePath: null,
+    },
+    fresh: false,
+  })),
+  setAppSettings: vi.fn(async (cfg) => cfg),
 }));
 
 const mockedApi = vi.mocked(api);
@@ -205,11 +219,38 @@ describe("useAppStore slices", () => {
     expect(store.getState().currentFileDiff?.newPath).toBe("b.ts");
   });
 
-  it("persists theme and updates log filter", () => {
+  it("persists theme preference and updates log filter", async () => {
     const store = createAppStore();
-    store.getState().setTheme("light");
+    await store.getState().setTheme("light");
+    expect(mockedApi.setAppSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ theme: "light" }),
+    );
     expect(store.getState().theme).toBe("light");
-    expect(window.localStorage.getItem("openpatchline:theme")).toBe("light");
+  });
+
+  it("loads settings from backend and syncs system theme", async () => {
+    mockedApi.getAppSettings.mockResolvedValueOnce({
+      config: {
+        theme: "dark",
+        codeFontFamily: "",
+        codeFontSize: 15,
+        tabWidth: 2,
+        defaultDiffMode: "unified",
+        ignoreWhitespaceDefault: true,
+        externalEditorCommand: null,
+        gitExecutablePath: null,
+      },
+      fresh: false,
+    });
+    const store = createAppStore();
+    await store.getState().loadSettings();
+    expect(store.getState().settings.codeFontSize).toBe(15);
+    // 行高随字号换算：15px × (20/13) ≈ 23
+    expect(store.getState().codeRowHeight).toBe(23);
+    expect(store.getState().settingsLoaded).toBe(true);
+    // 非 system 偏好下系统主题变化不影响生效主题
+    store.getState().syncSystemTheme();
+    expect(store.getState().theme).toBe("dark");
   });
 
   it("supports range compare, swap direction, and commit history persistence", async () => {
@@ -274,6 +315,7 @@ describe("useAppStore slices", () => {
       "a.ts",
       "stage",
       [{ rowIndex: 0, side: "new" }],
+      false,
     );
     expect(store.getState().activeView).toBe("log");
   });

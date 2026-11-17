@@ -23,15 +23,20 @@ import {
   FolderOpenIcon,
   LogoMarkIcon,
   MoonIcon,
+  SettingsIcon,
   SunIcon,
 } from "./components/Icons";
+import { SettingsModal } from "./components/Settings/SettingsModal";
 import { Sidebar } from "./components/Sidebar/Sidebar";
+import { runAppAction } from "./keyboard/appActions";
+import { KEYBINDINGS, matchesKeybinding } from "./keyboard/keymap";
 import { useAppStore } from "./store/app";
 import type { GitProgressEvent, RepoState } from "./types";
 import { reportError } from "./utils/errors";
 
 const OPEN_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘ O" : "Ctrl O";
 const THEME_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘⇧T" : "Ctrl+Shift+T";
+const SETTINGS_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘," : "Ctrl+,";
 
 const diffViewModule = DiffViewModule as unknown as {
   DiffView?: ComponentType;
@@ -103,7 +108,7 @@ const REPO_STATE_VERB: Record<Exclude<RepoState, "clean">, string> = {
   applying: "应用补丁",
 };
 
-/** 顶栏：品牌标识 + 仓库切换器 + 分支面包屑 + 主题切换 + 打开仓库。 */
+/** 顶栏：品牌标识 + 仓库切换器 + 分支面包屑 + 主题切换 + 设置 + 打开仓库。 */
 function TopBar() {
   const repo = useAppStore((s) => s.repo);
   const recentRepos = useAppStore((s) => s.recentRepos);
@@ -111,7 +116,8 @@ function TopBar() {
   const removeRecentRepo = useAppStore((s) => s.removeRecentRepo);
   const loadRecentRepos = useAppStore((s) => s.loadRecentRepos);
   const theme = useAppStore((s) => s.theme);
-  const setTheme = useAppStore((s) => s.setTheme);
+  const toggleTheme = useAppStore((s) => s.toggleTheme);
+  const openSettings = useAppStore((s) => s.openSettings);
 
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const switcherRef = useRef<HTMLDivElement | null>(null);
@@ -248,9 +254,18 @@ function TopBar() {
           className="icon-btn top-bar-theme"
           aria-label={toggleThemeLabel}
           title={toggleThemeLabel}
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+          onClick={toggleTheme}
         >
           {theme === "dark" ? <SunIcon /> : <MoonIcon />}
+        </button>
+        <button
+          type="button"
+          className="icon-btn top-bar-settings"
+          aria-label="打开设置"
+          title={`打开设置 (${SETTINGS_SHORTCUT})`}
+          onClick={openSettings}
+        >
+          <SettingsIcon />
         </button>
         <OpenRepoButton />
       </div>
@@ -556,14 +571,24 @@ export default function App() {
   const theme = useAppStore((s) => s.theme);
   const goBackToLog = useAppStore((s) => s.goBackToLog);
 
-  // 主题落到 <html data-theme>，驱动 theme.css 的令牌覆盖。
+  // 生效主题落到 <html data-theme>（驱动 theme.css 令牌覆盖）。
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
-  // 启动时加载最近打开的仓库列表（后端自动清理失效路径），并绑定全局未捕获错误日志。
+  // 系统主题偏好变化时同步（仅设置为主题=跟随系统时有实际作用）。
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    const onChange = () => useAppStore.getState().syncSystemTheme();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  // 启动时加载最近仓库（后端自动清理失效路径）、应用设置，并绑定全局未捕获错误日志。
   useEffect(() => {
     void useAppStore.getState().loadRecentRepos();
+    void useAppStore.getState().loadSettings();
     const onError = (ev: ErrorEvent) => {
       reportError("window.error", ev.error ?? ev.message);
     };
@@ -602,11 +627,14 @@ export default function App() {
     };
   }, []);
 
-  // 全局快捷键：Escape 返回列表，Cmd/Ctrl+O 打开仓库，Cmd/Ctrl+Shift+T 切换主题。
+  // 全局快捷键（docs/11 §三 6.3）：经 keymap 注册表匹配后路由到 runAppAction；
+  // Escape 返回列表 / 关闭 Blame。视图级键位（⌘D、[ ] 等）由各视图自行处理。
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const state = useAppStore.getState();
-      if (e.key === "Escape" && !state.repoCandidates) {
+      if (e.key === "Escape") {
+        // 浮层（设置 / 命令面板 / 仓库候选）各自持有捕获监听优先关闭。
+        if (state.repoCandidates || state.settingsOpen || state.commandPaletteOpen) return;
         if (state.activeView === "diff") {
           goBackToLog();
           return;
@@ -615,20 +643,35 @@ export default function App() {
           state.closeBlame();
           return;
         }
-      }
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "o") {
-        e.preventDefault();
-        void state.openRepo();
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "t") {
-        e.preventDefault();
-        state.setTheme(state.theme === "dark" ? "light" : "dark");
+      for (const b of KEYBINDINGS) {
+        if (b.id === "back" || b.id === "commit") continue;
+        if (matchesKeybinding(e, b)) {
+          if (runAppAction(b.id)) e.preventDefault();
+          return;
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [goBackToLog]);
+
+  // macOS 原生菜单栏事件 → 与快捷键共用同一动作路由。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listen<string>("app_menu_action", (event) => {
+      runAppAction(event.payload);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   if (!repo) {
     return (
@@ -700,6 +743,7 @@ export default function App() {
             </div>
           </div>
         </main>
+        <SettingsModal />
         <RepoCandidateModal />
       </div>
     );
@@ -726,6 +770,7 @@ export default function App() {
           )}
         </main>
       </div>
+      <SettingsModal />
       <RepoCandidateModal />
     </div>
   );

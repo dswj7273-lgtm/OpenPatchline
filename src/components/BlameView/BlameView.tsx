@@ -28,7 +28,6 @@ import {
 import "./BlameView.css";
 import "../../highlighter/tokens.css";
 
-const ROW_HEIGHT = 20;
 const OVERSCAN = 15;
 
 /** 根据文件内所有提交时间戳计算归一化年龄权重（0 = 最旧，1 = 最新）。 */
@@ -54,6 +53,7 @@ function computeCommitAges(commits: Record<string, BlameCommitInfo>): Map<string
 }
 
 export function BlameView() {
+  const ROW_HEIGHT = useAppStore((s) => s.codeRowHeight);
   const blameResult = useAppStore((s) => s.blameResult);
   const blameLoading = useAppStore((s) => s.blameLoading);
   const blameHistory = useAppStore((s) => s.blameHistory);

@@ -6,10 +6,12 @@ import { create } from "zustand";
 import { createDiffSlice } from "./diffSlice";
 import { createLogSlice } from "./logSlice";
 import { createRepoSlice } from "./repoSlice";
-import type { ActiveView, AppState, GitBusy, Theme } from "./types";
+import { createSettingsSlice } from "./settingsSlice";
+import type { ActiveView, AppState, GitBusy, Theme, ThemePreference } from "./types";
+import { createUiSlice } from "./uiSlice";
 import { createWorkspaceSlice } from "./workspaceSlice";
 
-export type { ActiveView, AppState, GitBusy, Theme };
+export type { ActiveView, AppState, GitBusy, Theme, ThemePreference };
 
 export function createAppStore() {
   return create<AppState>()((...a) => ({
@@ -17,6 +19,8 @@ export function createAppStore() {
     ...createLogSlice(...a),
     ...createDiffSlice(...a),
     ...createWorkspaceSlice(...a),
+    ...createSettingsSlice(...a),
+    ...createUiSlice(...a),
   }));
 }
 

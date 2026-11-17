@@ -32,6 +32,7 @@ pub fn apply_diff_selection(
     path: &str,
     action: DiffPatchAction,
     selections: &[DiffLineSelection],
+    ignore_ws: bool,
 ) -> AppResult<()> {
     match (scope.kind, action) {
         (DiffScopeKind::Workdir, DiffPatchAction::Stage | DiffPatchAction::Discard)
@@ -71,7 +72,16 @@ pub fn apply_diff_selection(
 
     let old_str = bytes_to_utf8(loaded.old_bytes.as_deref())?;
     let new_str = bytes_to_utf8(loaded.new_bytes.as_deref())?;
-    let rows = diff_engine::diff_strings(old_str, new_str, &TextDiffOptions::default());
+    // 选区行下标来自前端视图；必须与视图使用相同的空白比较选项，
+    // 否则行下标错位会误操作到别的行。
+    let rows = diff_engine::diff_strings(
+        old_str,
+        new_str,
+        &TextDiffOptions {
+            ignore_whitespace: ignore_ws,
+            ..TextDiffOptions::default()
+        },
+    );
 
     let target_text = build_patched_text(
         old_str,

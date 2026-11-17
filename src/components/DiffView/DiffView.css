@@ -525,7 +525,7 @@
   background: var(--surface-1);
   font-family: var(--font-code);
   font-size: var(--code-size, 13px);
-  line-height: 20px;
+  line-height: var(--code-row-h, 20px);
 }
 
 .diff-grid__sizer {
@@ -581,7 +581,7 @@
   left: 0;
   right: 0;
   display: grid;
-  height: 20px;
+  height: var(--code-row-h, 20px);
   grid-template-columns: 1fr 1fr;
 }
 
@@ -622,6 +622,7 @@
 }
 
 .diff-cell__content {
+  tab-size: var(--code-tab-size, 4);
   padding: 0 10px 0 8px;
   overflow: hidden;
   color: var(--text-primary);
@@ -686,7 +687,7 @@
   left: 0;
   right: 0;
   display: grid;
-  height: 20px;
+  height: var(--code-row-h, 20px);
   grid-template-columns: 50px 50px 1fr;
 }
 

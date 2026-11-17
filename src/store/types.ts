@@ -5,6 +5,7 @@
 import type { StateCreator } from "zustand";
 import { isCancelledError, reportError } from "../utils/errors";
 import type {
+  AppSettings,
   BranchInfo,
   ChangedFile,
   ChildRepo,
@@ -27,13 +28,14 @@ import type {
   RepoInfo,
   ResetMode,
   StashEntry,
+  Theme,
+  ThemePreference,
 } from "../types";
 
 /** 主区域视图。 */
 export type ActiveView = "log" | "diff" | "conflict" | "blame";
 
-/** 主题。 */
-export type Theme = "dark" | "light";
+export type { Theme, ThemePreference };
 
 /** 进行中的 git 操作，用于互斥与按钮态。 */
 export type GitBusy =
@@ -68,7 +70,8 @@ export const EMPTY_LOG_FILTER: LogFilter = {
   until: null,
 };
 
-/** 读取本地持久化的主题偏好（不可用时回退深色），并同步到根元素避免首帧闪烁。 */
+/** 读取本地持久化的主题偏好（不可用时回退深色），并同步到根元素避免首帧闪烁。
+ *  仅供设置加载完成前的首帧提示；正式状态以 settingsSlice 为准。 */
 export function readInitialTheme(): Theme {
   let initial: Theme = "dark";
   try {
@@ -81,15 +84,6 @@ export function readInitialTheme(): Theme {
     document.documentElement.dataset.theme = initial;
   }
   return initial;
-}
-
-/** 写入主题偏好。 */
-export function persistTheme(theme: Theme): void {
-  try {
-    window.localStorage.setItem("openpatchline:theme", theme);
-  } catch {
-    /* 忽略 */
-  }
 }
 
 /** 取 git 输出的最后一行作为通知摘要（"Already up to date." 等）。 */
@@ -108,7 +102,6 @@ export interface RepoSlice {
   repo: RepoInfo | null;
   recentRepos: RecentRepo[];
   repoCandidates: { path: string; candidates: ChildRepo[] } | null;
-  theme: Theme;
   error: string | null;
   notice: string | null;
   openRepo: (path?: string) => Promise<void>;
@@ -118,7 +111,31 @@ export interface RepoSlice {
   dismissRepoCandidates: () => void;
   dismissNotice: () => void;
   clearError: () => void;
-  setTheme: (t: Theme) => void;
+}
+
+/** 应用设置与主题（v0.6 / 6.2；theme 为解析后的生效值）。 */
+export interface SettingsSlice {
+  settings: AppSettings;
+  settingsLoaded: boolean;
+  theme: Theme;
+  /** 代码行高（px），由字号设置派生，供虚拟滚动定位与 CSS 变量共用。 */
+  codeRowHeight: number;
+  loadSettings: () => Promise<void>;
+  updateSettings: (patch: Partial<AppSettings>) => Promise<void>;
+  setTheme: (pref: ThemePreference) => void;
+  toggleTheme: () => void;
+  /** 系统主题偏好变化时同步生效主题（仅 theme=system 时有作用）。 */
+  syncSystemTheme: () => void;
+}
+
+/** 全局浮层 UI（设置弹窗 / 命令面板）。 */
+export interface UiSlice {
+  settingsOpen: boolean;
+  commandPaletteOpen: boolean;
+  openSettings: () => void;
+  closeSettings: () => void;
+  openCommandPalette: () => void;
+  closeCommandPalette: () => void;
 }
 
 export interface LogSlice {
@@ -132,6 +149,8 @@ export interface LogSlice {
   commitSignature: CommitSignatureInfo | null;
   compareRange: CompareRange | null;
   rangeFiles: ChangedFile[];
+  /** ⌘F 聚焦搜索框的自增计数（值变化触发 GitLogView 聚焦）。 */
+  searchFocusTick: number;
   loadMoreCommits: () => Promise<void>;
   reloadGraph: () => Promise<void>;
   selectCommit: (id: string | null) => Promise<void>;
@@ -146,6 +165,7 @@ export interface LogSlice {
   swapCompareRange: () => Promise<void>;
   clearCompareRange: () => void;
   setLogFilter: (f: LogFilter) => void;
+  focusSearch: () => void;
 }
 
 export interface DiffSlice {
@@ -236,6 +256,6 @@ export interface WorkspaceSlice {
   rewriteRecentCommits: (plan: RebasePlanEntry[]) => Promise<boolean>;
 }
 
-export type AppState = RepoSlice & LogSlice & DiffSlice & WorkspaceSlice;
+export type AppState = RepoSlice & LogSlice & DiffSlice & WorkspaceSlice & SettingsSlice & UiSlice;
 
 export type AppSlice<T> = StateCreator<AppState, [], [], T>;

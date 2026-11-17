@@ -7,6 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AppSettings,
   BranchInfo,
   ChangedFile,
   CommitMetadata,
@@ -81,24 +82,39 @@ export function getRangeFiles(
   return invoke<ChangedFile[]>("get_range_files", { repoId, baseRef, targetRef });
 }
 
-/** 按 scope 计算单个文件的左右分栏 diff。 */
+/** 按 scope 计算单个文件的左右分栏 diff；ignoreWhitespace 为 true 时忽略空白差异。 */
 export function getFileDiff(
   repoId: string,
   scope: DiffScope,
   path: string,
+  ignoreWhitespace = false,
 ): Promise<FileDiffResult> {
-  return invoke<FileDiffResult>("get_file_diff", { repoId, scope, path });
+  return invoke<FileDiffResult>("get_file_diff", {
+    repoId,
+    scope,
+    path,
+    ignoreWhitespace,
+  });
 }
 
-/** 对工作区或暂存区 diff 应用 hunk / 行级局部暂存、取消暂存或丢弃。 */
+/** 对工作区或暂存区 diff 应用 hunk / 行级局部暂存、取消暂存或丢弃。
+ *  ignoreWhitespace 必须与视图加载时一致，保证选区行下标对齐。 */
 export function applyDiffSelection(
   repoId: string,
   scope: DiffScope,
   path: string,
   action: DiffPatchAction,
   selections: DiffLineSelection[],
+  ignoreWhitespace = false,
 ): Promise<void> {
-  return invoke<void>("apply_diff_selection", { repoId, scope, path, action, selections });
+  return invoke<void>("apply_diff_selection", {
+    repoId,
+    scope,
+    path,
+    action,
+    selections,
+    ignoreWhitespace,
+  });
 }
 
 /** 工作区文件状态（staged / unstaged）。 */
@@ -328,4 +344,14 @@ export function getFileBlame(
   commitId: string | null = null,
 ): Promise<FileBlameResult> {
   return invoke<FileBlameResult>("get_file_blame", { repoId, path, commitId });
+}
+
+/** 读取应用设置；fresh 为 true 表示尚未持久化过（首次运行）。 */
+export function getAppSettings(): Promise<{ config: AppSettings; fresh: boolean }> {
+  return invoke<{ config: AppSettings; fresh: boolean }>("get_app_config");
+}
+
+/** 保存应用设置（后端会规整取值），返回落盘后的最终配置。 */
+export function setAppSettings(config: AppSettings): Promise<AppSettings> {
+  return invoke<AppSettings>("set_app_config", { config });
 }

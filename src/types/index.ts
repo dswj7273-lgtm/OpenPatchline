@@ -380,3 +380,40 @@ export interface FileBlameResult {
   commits: Record<string, BlameCommitInfo>;
   lines: BlameLine[];
 }
+
+/** 主题偏好：跟随系统 / 深色 / 浅色。 */
+export type ThemePreference = "system" | "dark" | "light";
+
+/** 实际生效主题（system 偏好已解析为深 / 浅）。 */
+export type Theme = "dark" | "light";
+
+/** 应用设置（与 Rust `AppConfig` 一一对应，camelCase 线格式）。 */
+export interface AppSettings {
+  theme: ThemePreference;
+  /** 代码字体族；空串表示使用内置默认字体栈。 */
+  codeFontFamily: string;
+  /** 代码字号（px）。 */
+  codeFontSize: number;
+  /** Tab 宽度（列数）。 */
+  tabWidth: number;
+  /** 默认 Diff 视图模式。 */
+  defaultDiffMode: "split" | "unified";
+  /** Diff 忽略空白默认值。 */
+  ignoreWhitespaceDefault: boolean;
+  /** 外部编辑器命令模板（支持 {path} / {line} 占位符）。 */
+  externalEditorCommand: string | null;
+  /** Git 可执行文件路径覆盖。 */
+  gitExecutablePath: string | null;
+}
+
+/** 应用默认设置（与 Rust 侧 Default 保持一致）。 */
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+  theme: "system",
+  codeFontFamily: "",
+  codeFontSize: 13,
+  tabWidth: 4,
+  defaultDiffMode: "split",
+  ignoreWhitespaceDefault: false,
+  externalEditorCommand: null,
+  gitExecutablePath: null,
+};

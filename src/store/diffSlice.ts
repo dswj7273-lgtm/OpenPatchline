@@ -55,7 +55,7 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
     },
 
     showDiffFile: async (index) => {
-      const { repo, diffScope, diffFiles } = get();
+      const { repo, diffScope, diffFiles, settings } = get();
       if (!repo) {
         set({ error: "当前未打开仓库" });
         return;
@@ -74,7 +74,12 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
       const seq = ++diffReqSeq;
       set({ selectedDiffFileIndex: index, diffLoading: true, error: null });
       try {
-        const diff = await api.getFileDiff(repoId, scopeSnapshot, file.path);
+        const diff = await api.getFileDiff(
+          repoId,
+          scopeSnapshot,
+          file.path,
+          settings.ignoreWhitespaceDefault,
+        );
         const latest = get();
         if (
           latest.repo?.id !== repoId ||
@@ -131,7 +136,15 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
     },
 
     applyDiffSelection: async (action, selections) => {
-      const { repo, diffScope, diffFiles, selectedDiffFileIndex, currentFileDiff, gitBusy } = get();
+      const {
+        repo,
+        diffScope,
+        diffFiles,
+        selectedDiffFileIndex,
+        currentFileDiff,
+        gitBusy,
+        settings,
+      } = get();
       if (!repo) {
         set({ error: "当前未打开仓库" });
         return false;
@@ -146,7 +159,14 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
       const repoId = repo.id;
       set({ gitBusy: "patch", error: null, notice: null });
       try {
-        await api.applyDiffSelection(repoId, diffScope, currentFile.path, action, selections);
+        await api.applyDiffSelection(
+          repoId,
+          diffScope,
+          currentFile.path,
+          action,
+          selections,
+          settings.ignoreWhitespaceDefault,
+        );
         if (get().repo?.id !== repoId) return false;
 
         await get().loadFileStatus();
@@ -165,7 +185,12 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
           const nextFiles = diffFiles.map((f, idx) =>
             idx === selectedDiffFileIndex ? { ...f, path: entry.path } : f,
           );
-          const refreshed = await api.getFileDiff(repoId, diffScope, entry.path);
+          const refreshed = await api.getFileDiff(
+            repoId,
+            diffScope,
+            entry.path,
+            settings.ignoreWhitespaceDefault,
+          );
           if (get().repo?.id === repoId && get().diffScope === diffScope) {
             set({
               diffFiles: nextFiles,

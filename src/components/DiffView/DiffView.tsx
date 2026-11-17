@@ -14,6 +14,7 @@ import {
   requestHighlight,
   type SideTokens,
 } from "../../highlighter/workerClient";
+import { matchesKeyId } from "../../keyboard/keymap";
 import { useAppStore } from "../../store/app";
 import type { AlignedRow, DiffLineSelection, DiffPatchAction } from "../../types";
 import { AlertIcon } from "../Icons";
@@ -62,7 +63,10 @@ export function DiffView() {
   const openConflictFile = useAppStore((s) => s.openConflictFile);
   const openFileBlame = useAppStore((s) => s.openFileBlame);
 
-  const [mode, setMode] = useState<DiffMode>("split");
+  const [mode, setMode] = useState<DiffMode>(() => {
+    const pref = useAppStore.getState().settings.defaultDiffMode;
+    return pref === "unified" ? "unified" : "split";
+  });
   const [hLinked, setHLinked] = useState(readHLinked);
 
   const [explicitState, setExplicitState] = useState<{
@@ -91,7 +95,8 @@ export function DiffView() {
     });
   };
 
-  // 快捷键：Cmd/Ctrl+D 切换分栏/统一，[ / ] 跳转上一处/下一处变更。
+  // 快捷键（docs/11 §三 6.3）：⌘D 切换分栏/统一；[ / ] 与 ⌥↑/⌥↓ 跳转
+  // 上/下一处变更；⌘[ / ⌘] 切换上/下一个文件。均经 keymap 注册表匹配。
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -101,22 +106,52 @@ export function DiffView() {
         target?.isContentEditable;
       if (inInput) return;
 
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "d") {
+      if (matchesKeyId(e, "diff-mode")) {
         e.preventDefault();
         setMode((m) => (m === "split" ? "unified" : "split"));
         return;
       }
-      if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "[" || e.key === "]")) {
+      if (matchesKeyId(e, "prev-file")) {
         e.preventDefault();
-        const direction: GotoChangeDetail["direction"] = e.key === "[" ? -1 : 1;
+        void prevDiffFile();
+        return;
+      }
+      if (matchesKeyId(e, "next-file")) {
+        e.preventDefault();
+        void nextDiffFile();
+        return;
+      }
+      if (matchesKeyId(e, "prev-change-alt")) {
+        e.preventDefault();
         window.dispatchEvent(
-          new CustomEvent<GotoChangeDetail>(GOTO_CHANGE_EVENT, { detail: { direction } }),
+          new CustomEvent<GotoChangeDetail>(GOTO_CHANGE_EVENT, { detail: { direction: -1 } }),
+        );
+        return;
+      }
+      if (matchesKeyId(e, "next-change-alt")) {
+        e.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent<GotoChangeDetail>(GOTO_CHANGE_EVENT, { detail: { direction: 1 } }),
+        );
+        return;
+      }
+      if (matchesKeyId(e, "prev-change")) {
+        e.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent<GotoChangeDetail>(GOTO_CHANGE_EVENT, { detail: { direction: -1 } }),
+        );
+        return;
+      }
+      if (matchesKeyId(e, "next-change")) {
+        e.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent<GotoChangeDetail>(GOTO_CHANGE_EVENT, { detail: { direction: 1 } }),
         );
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [prevDiffFile, nextDiffFile]);
 
   const diffSides = useMemo(() => {
     if (

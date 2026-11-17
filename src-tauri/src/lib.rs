@@ -12,6 +12,7 @@
 //! - [`watcher`]：.git 目录监听（变更主动推送，docs/04 §7）；
 //! - [`commands`]：Tauri 命令层（前端 invoke 入口）。
 
+pub mod app_config;
 pub mod commands;
 pub mod diff_engine;
 pub mod error;
@@ -24,10 +25,66 @@ pub mod repo_manager;
 pub mod types;
 pub mod watcher;
 
-/// 应用入口：注册插件、全局状态与全部命令。
+/// 应用入口：注册插件、全局状态、原生菜单与全部命令。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    use tauri::Manager;
+    use tauri::Emitter;
+    use tauri::{Manager, menu::{MenuBuilder, MenuItem, SubmenuBuilder}};
+
+    fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+        // 菜单项 id 与前端 keymap 注册表（src/keyboard/keymap.ts）对齐，
+        // 事件统一以 `app_menu_action` 推送、由 runAppAction 路由。
+        let open_repo = MenuItem::with_id(app, "open-repo", "打开仓库…", true, Some("CmdOrCtrl+O"))?;
+        let refresh = MenuItem::with_id(app, "refresh", "刷新", true, Some("CmdOrCtrl+R"))?;
+        let file_menu = SubmenuBuilder::new(app, "文件")
+            .item(&open_repo)
+            .item(&refresh)
+            .separator()
+            .quit()
+            .build()?;
+
+        let edit_menu = SubmenuBuilder::new(app, "编辑")
+            .undo()
+            .redo()
+            .separator()
+            .cut()
+            .copy()
+            .paste()
+            .select_all()
+            .build()?;
+
+        let palette =
+            MenuItem::with_id(app, "command-palette", "命令面板…", true, Some("CmdOrCtrl+K"))?;
+        let search = MenuItem::with_id(app, "search", "搜索提交", true, Some("CmdOrCtrl+F"))?;
+        let theme = MenuItem::with_id(
+            app,
+            "toggle-theme",
+            "切换深 / 浅主题",
+            true,
+            Some("CmdOrCtrl+Shift+T"),
+        )?;
+        let settings =
+            MenuItem::with_id(app, "open-settings", "设置…", true, Some("CmdOrCtrl+Comma"))?;
+        let view_menu = SubmenuBuilder::new(app, "视图")
+            .item(&palette)
+            .item(&search)
+            .item(&theme)
+            .separator()
+            .item(&settings)
+            .build()?;
+
+        let window_menu = SubmenuBuilder::new(app, "窗口")
+            .minimize()
+            .separator()
+            .close_window()
+            .build()?;
+
+        let menu = MenuBuilder::new(app)
+            .items(&[&file_menu, &edit_menu, &view_menu, &window_menu])
+            .build()?;
+        app.set_menu(menu).map(|_| ())
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -81,11 +138,25 @@ pub fn run() {
             commands::get_log_file_path,
             commands::get_conflict_file,
             commands::resolve_conflict_file,
-            commands::get_file_blame
+            commands::get_file_blame,
+            commands::get_app_config,
+            commands::set_app_config
         ])
-        // watcher 需要 AppHandle（emit 事件），在 setup 阶段注册为全局状态。
+        // watcher 需要 AppHandle（emit 事件），在 setup 阶段注册为全局状态；
+        // 同时构建原生菜单（快捷键在 macOS 菜单栏可见）并预加载应用设置。
         .setup(|app| {
             app.manage(watcher::RepoWatcher::new(app.handle().clone()));
+            if let Err(e) = build_menu(app.handle()) {
+                eprintln!("[menu] 构建原生菜单失败: {e}");
+            }
+            app.on_menu_event(|app, event| {
+                let _ = app.emit("app_menu_action", event.id().as_ref());
+            });
+            if let Ok(file) = app_config::app_config_file(app.handle())
+                && let Ok((config, _)) = app_config::load_app_config(&file)
+            {
+                git_remote::set_git_bin_override(config.git_executable_path.as_deref());
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

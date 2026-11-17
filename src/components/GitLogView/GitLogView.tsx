@@ -619,6 +619,7 @@ function GitCommandCenter({
 
 export function GitLogView() {
   const logFilter = useAppStore((s) => s.logFilter);
+  const searchFocusTick = useAppStore((s) => s.searchFocusTick);
   const setLogFilter = useAppStore((s) => s.setLogFilter);
   const selectedCommitId = useAppStore((s) => s.selectedCommitId);
   const compareRange = useAppStore((s) => s.compareRange);
@@ -686,17 +687,12 @@ export function GitLogView() {
     return () => clearTimeout(timer);
   }, [search, author, branch, sinceDate, untilDate, isPrefixCommand, setLogFilter]);
 
+  // ⌘F 聚焦搜索框（App 层快捷键路由派发 tick，视图挂载时同样生效）。
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+    if (searchFocusTick === 0) return;
+    searchInputRef.current?.focus();
+    searchInputRef.current?.select();
+  }, [searchFocusTick]);
 
   useEffect(() => {
     if (!popoverOpen && !cmdOpen) return;

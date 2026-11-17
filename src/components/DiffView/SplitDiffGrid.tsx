@@ -1,9 +1,9 @@
 /**
  * 分栏 / 统一 diff 虚拟滚动网格 — docs/05 §11 / docs/06 §4。
  *
- * 单一滚动容器 + 绝对定位行（ROW_H = 20px），只渲染可视窗口
- * ±OVERSCAN 行；左右两栏共享同一行集合，天然同步纵向滚动。
- * 行高必须与 CSS（.diff-row / .u-row 的 line-height）保持一致。
+ * 单一滚动容器 + 绝对定位行（行高由设置字号派生，见 useCodeRowHeight），
+ * 只渲染可视窗口 ±OVERSCAN 行；左右两栏共享同一行集合，天然同步纵向滚动。
+ * 行高必须与 CSS（.diff-row / .u-row 的 --code-row-h）保持一致。
  *
  * 横向滚动自行实现（行号槽与分栏中缝始终固定）：
  * - 每侧一个横向偏移，经 CSS 变量 --diff-scroll-x-old / -new 平移代码轨道；
@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import type { TokenSpan } from "../../highlighter/tokenizer";
+import { useAppStore } from "../../store/app";
 import type { AlignedRow, DiffLineSelection, DiffPatchAction } from "../../types";
 import ChangeRail, {
   groupChangeBlocks,
@@ -33,11 +34,14 @@ import {
   maxColsOf,
 } from "./diffGridUtils";
 
-/** 行高（px），对应 docs/06 §6 的 --code-line-height。 */
-export const ROW_H = 20;
-
 /** 可视区两侧各多渲染的行数。 */
 const OVERSCAN = 30;
+
+/** 代码行高（px）：由设置中的字号派生（--code-row-h 同源），
+ *  保证 JS 虚拟滚动定位与 CSS 渲染高度一致。 */
+function useCodeRowHeight(): number {
+  return useAppStore((s) => s.codeRowHeight);
+}
 
 /** 跳转变更时，目标行上方预留的行数（留出上下文）。 */
 const GOTO_PADDING_ROWS = 3;
@@ -214,10 +218,18 @@ function useCharWidth(ref: RefObject<HTMLDivElement | null>): number {
  * 虚拟滚动公共逻辑：纵向滚动跟踪（rAF 节流）、可视范围计算、
  * 数据切换回到顶部、监听 goto-change 事件滚动到目标变更。
  */
-function useDiffViewport(lineCount: number, changeIndices: number[], resetKey: unknown) {
+function useDiffViewport(
+  lineCount: number,
+  changeIndices: number[],
+  resetKey: unknown,
+  rowH: number,
+) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [vp, setVp] = useState<Viewport>({ scrollTop: 0, height: 0, width: 0 });
   const rafRef = useRef<number | null>(null);
+  /** 跳转变更事件回调读取的最新行高（避免监听器随字号设置反复重绑）。 */
+  const rowHRef = useRef(rowH);
+  rowHRef.current = rowH;
 
   const handleScroll = useCallback(() => {
     if (rafRef.current !== null) return;
@@ -259,14 +271,16 @@ function useDiffViewport(lineCount: number, changeIndices: number[], resetKey: u
   );
 
   // 切换文件（数据身份变化）时定位：有变更 → 直接跳到第一处变更
-  // （上方留 3 行上下文）；无变更 → 回到顶部。
+  // （上方留 3 行上下文）；无变更 → 回到顶部。行高变化（字号设置调整）
+  // 时按比例换算当前滚动位置，避免视口跳变。
   useEffect(() => {
     const el = ref.current;
     const firstChange = changeIndices[0];
     const top =
-      firstChange !== undefined ? Math.max(0, firstChange * ROW_H - GOTO_PADDING_ROWS * ROW_H) : 0;
+      firstChange !== undefined ? Math.max(0, firstChange * rowH - GOTO_PADDING_ROWS * rowH) : 0;
     if (el) el.scrollTop = top;
     setVp((p) => (p.scrollTop === top ? p : { ...p, scrollTop: top }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey, changeIndices]);
 
   // 跳转到上 / 下一处变更（DiffHeader 派发）。
@@ -275,11 +289,11 @@ function useDiffViewport(lineCount: number, changeIndices: number[], resetKey: u
       const dir = (e as CustomEvent<GotoChangeDetail>).detail?.direction;
       const el = ref.current;
       if (!dir || !el) return;
-      const firstVisible = Math.floor(el.scrollTop / ROW_H);
+      const firstVisible = Math.floor(el.scrollTop / rowHRef.current);
       const target = findNextChangeIndex(changeIndices, firstVisible, dir);
       if (target === undefined) return;
       el.scrollTo({
-        top: Math.max(0, target * ROW_H - GOTO_PADDING_ROWS * ROW_H),
+        top: Math.max(0, target * rowHRef.current - GOTO_PADDING_ROWS * rowHRef.current),
         behavior: "smooth",
       });
     };
@@ -287,7 +301,7 @@ function useDiffViewport(lineCount: number, changeIndices: number[], resetKey: u
     return () => window.removeEventListener(GOTO_CHANGE_EVENT, onGoto);
   }, [changeIndices]);
 
-  const { start, end } = computeVisibleWindow(lineCount, vp.scrollTop, vp.height, ROW_H, OVERSCAN);
+  const { start, end } = computeVisibleWindow(lineCount, vp.scrollTop, vp.height, rowH, OVERSCAN);
   return { ref, handleScroll, start, end, vp };
 }
 
@@ -505,17 +519,17 @@ function HScrollBar({
 }
 
 /** 滚动到目标行（留出上下文行，与 goto-change 一致）。 */
-function useJumpHandlers(ref: React.RefObject<HTMLDivElement | null>) {
+function useJumpHandlers(ref: React.RefObject<HTMLDivElement | null>, rowH: number) {
   const onJumpToRow = useCallback(
     (row: number) => {
       const el = ref.current;
       if (!el) return;
       el.scrollTo({
-        top: Math.max(0, row * ROW_H - GOTO_PADDING_ROWS * ROW_H),
+        top: Math.max(0, row * rowH - GOTO_PADDING_ROWS * rowH),
         behavior: "smooth",
       });
     },
-    [ref],
+    [ref, rowH],
   );
   /** 按比例滚动（0..1，导航条拖拽用；即时跟随，不做平滑）。 */
   const onScrollTo = useCallback(
@@ -544,12 +558,14 @@ export default function SplitDiffGrid({
   onDragSelectLines,
   onApplyHunk,
 }: SplitDiffGridProps) {
+  const rowH = useCodeRowHeight();
   const { ref, handleScroll, start, end, vp } = useDiffViewport(
     rows.length,
     changeRowIndices,
     rows,
+    rowH,
   );
-  const { onJumpToRow, onScrollTo } = useJumpHandlers(ref);
+  const { onJumpToRow, onScrollTo } = useJumpHandlers(ref, rowH);
   const charW = useCharWidth(ref);
 
   // 每侧可视代码宽度与最大横向偏移。
@@ -605,7 +621,7 @@ export default function SplitDiffGrid({
     const row = rows[i];
     const block = selectable ? blockByStart.get(i) : undefined;
     items.push(
-      <div className="diff-row" role="row" aria-rowindex={i + 1} key={i} style={{ top: i * ROW_H }}>
+      <div className="diff-row" role="row" aria-rowindex={i + 1} key={i} style={{ top: i * rowH }}>
         <CodeCell
           cell={row.left}
           side="old"
@@ -662,7 +678,7 @@ export default function SplitDiffGrid({
         >
           <div
             className="diff-grid__sizer"
-            style={{ height: rows.length * ROW_H + (hasHScroll ? HSCROLL_RESERVE : 0) }}
+            style={{ height: rows.length * rowH + (hasHScroll ? HSCROLL_RESERVE : 0) }}
           >
             {items}
           </div>
@@ -688,7 +704,7 @@ export default function SplitDiffGrid({
       </div>
       <ChangeRail
         lineCount={rows.length}
-        rowHeight={ROW_H}
+        rowHeight={rowH}
         blocks={blocks}
         scrollTop={vp.scrollTop}
         viewportH={vp.height}
@@ -713,13 +729,15 @@ export function UnifiedGrid({
   onApplyHunk,
 }: UnifiedGridProps) {
   const { lines, changeLineIndices } = useMemo(() => buildUnifiedLines(rows), [rows]);
+  const rowH = useCodeRowHeight();
 
   const { ref, handleScroll, start, end, vp } = useDiffViewport(
     lines.length,
     changeLineIndices,
     lines,
+    rowH,
   );
-  const { onJumpToRow, onScrollTo } = useJumpHandlers(ref);
+  const { onJumpToRow, onScrollTo } = useJumpHandlers(ref, rowH);
   const charW = useCharWidth(ref);
 
   const cols = useMemo(() => maxColsOf(rows, "both"), [rows]);
@@ -775,7 +793,7 @@ export function UnifiedGrid({
         role="row"
         aria-rowindex={i + 1}
         key={i}
-        style={{ top: i * ROW_H }}
+        style={{ top: i * rowH }}
         data-diff-row={canSelect ? line.rowIndex : undefined}
         data-diff-side={canSelect ? line.side : undefined}
       >
@@ -844,7 +862,7 @@ export function UnifiedGrid({
         >
           <div
             className="diff-grid__sizer"
-            style={{ height: lines.length * ROW_H + (maxX > 0 ? HSCROLL_RESERVE : 0) }}
+            style={{ height: lines.length * rowH + (maxX > 0 ? HSCROLL_RESERVE : 0) }}
           >
             {items}
           </div>
@@ -861,7 +879,7 @@ export function UnifiedGrid({
       </div>
       <ChangeRail
         lineCount={lines.length}
-        rowHeight={ROW_H}
+        rowHeight={rowH}
         blocks={blocks}
         scrollTop={vp.scrollTop}
         viewportH={vp.height}
