@@ -964,3 +964,57 @@
   opacity: 0.45;
   cursor: default;
 }
+
+/* 上下文折叠占位行（v0.6 / 6.5） */
+.diff-fold-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: color-mix(in oklch, var(--surface-2) 70%, var(--surface-1));
+  box-shadow:
+    inset 0 1px 0 var(--border-subtle),
+    inset 0 -1px 0 var(--border-subtle);
+  cursor: pointer;
+  user-select: none;
+  z-index: 2;
+  transition: background 120ms ease;
+}
+
+.diff-fold-row:hover,
+.diff-fold-row:focus-visible {
+  background: var(--surface-3);
+  outline: none;
+}
+
+.diff-fold-row__label {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80%;
+}
+
+.diff-fold-row:hover .diff-fold-row__label,
+.diff-fold-row:focus-visible .diff-fold-row__label {
+  color: var(--text-secondary);
+}
+
+.diff-fold-row--unified {
+  /* 统一视图行号槽宽 ×2 对齐代码区 */
+  margin-left: 100px;
+}
+
+/* 忽略空白开关 */
+.diff-header__btn.diff-header__ws span {
+  font-family: var(--font-code);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}

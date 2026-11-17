@@ -25,14 +25,15 @@ import ChangeRail, {
 } from "./ChangeRail";
 import CodeCell, { CodeContent } from "./CodeCell";
 import {
-  buildSplitHunkSelections,
+  buildHunkSelectionsForRowIndices,
   buildUnifiedHunkSelections,
-  buildUnifiedLines,
+  buildUnifiedLinesFromItems,
   computeVisibleWindow,
   findNextChangeIndex,
   lineSelectionKey,
   maxColsOf,
 } from "./diffGridUtils";
+import { foldLabel, type FoldLayout } from "./foldUtils";
 
 /** 可视区两侧各多渲染的行数。 */
 const OVERSCAN = 30;
@@ -82,6 +83,13 @@ export interface SplitDiffGridProps {
   onToggleSelectLine?: (rowIndex: number, side: "old" | "new", shiftKey: boolean) => void;
   onDragSelectLines?: (keys: Set<string>) => void;
   onApplyHunk?: (action: DiffPatchAction, selections: DiffLineSelection[]) => void;
+  /** 折叠布局（v0.6 / 6.5）；不传则全量展示。 */
+  layout?: FoldLayout | null;
+  onToggleFold?: (foldIndex: number) => void;
+  /** 外部滚动容器 ref（视图层读取 / 恢复滚动位置用）。 */
+  scrollRef?: RefObject<HTMLDivElement | null>;
+  /** 一次性滚动恢复值（数据重载但不应跳转时由视图层写入，消费后自动置 null）。 */
+  restoreScroll?: RefObject<number | null>;
 }
 
 export interface UnifiedGridProps {
@@ -94,6 +102,11 @@ export interface UnifiedGridProps {
   onToggleSelectLine?: (rowIndex: number, side: "old" | "new", shiftKey: boolean) => void;
   onDragSelectLines?: (keys: Set<string>) => void;
   onApplyHunk?: (action: DiffPatchAction, selections: DiffLineSelection[]) => void;
+  /** 折叠布局（v0.6 / 6.5）；不传则全量展示。 */
+  layout?: FoldLayout | null;
+  onToggleFold?: (foldIndex: number) => void;
+  scrollRef?: RefObject<HTMLDivElement | null>;
+  restoreScroll?: RefObject<number | null>;
 }
 
 /** 从浏览器鼠标拖拽选区提取命中的可应用变更行键集合。 */
@@ -217,14 +230,20 @@ function useCharWidth(ref: RefObject<HTMLDivElement | null>): number {
 /**
  * 虚拟滚动公共逻辑：纵向滚动跟踪（rAF 节流）、可视范围计算、
  * 数据切换回到顶部、监听 goto-change 事件滚动到目标变更。
+ *
+ * `externalRef`：外部传入的滚动容器 ref（供视图层读取/恢复滚动位置）；
+ * `restoreScroll`：一次性滚动恢复值（忽略空白切换等重载场景，消费后置 null）。
  */
 function useDiffViewport(
   lineCount: number,
   changeIndices: number[],
   resetKey: unknown,
   rowH: number,
+  externalRef?: RefObject<HTMLDivElement | null>,
+  restoreScroll?: RefObject<number | null>,
 ) {
-  const ref = useRef<HTMLDivElement | null>(null);
+  const internalRef = useRef<HTMLDivElement | null>(null);
+  const ref = externalRef ?? internalRef;
   const [vp, setVp] = useState<Viewport>({ scrollTop: 0, height: 0, width: 0 });
   const rafRef = useRef<number | null>(null);
   /** 跳转变更事件回调读取的最新行高（避免监听器随字号设置反复重绑）。 */
@@ -243,7 +262,7 @@ function useDiffViewport(
           : { scrollTop: el.scrollTop, height: el.clientHeight, width: el.clientWidth },
       );
     });
-  }, []);
+  }, [ref]);
 
   // 首帧与容器尺寸变化时更新可视宽高。
   useEffect(() => {
@@ -260,7 +279,7 @@ function useDiffViewport(
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [ref]);
 
   // 卸载时取消挂起的 rAF 回调。
   useEffect(
@@ -271,13 +290,18 @@ function useDiffViewport(
   );
 
   // 切换文件（数据身份变化）时定位：有变更 → 直接跳到第一处变更
-  // （上方留 3 行上下文）；无变更 → 回到顶部。行高变化（字号设置调整）
-  // 时按比例换算当前滚动位置，避免视口跳变。
+  // （上方留 3 行上下文）；无变更 → 回到顶部；携带一次性恢复值则优先恢复。
   useEffect(() => {
     const el = ref.current;
-    const firstChange = changeIndices[0];
-    const top =
-      firstChange !== undefined ? Math.max(0, firstChange * rowH - GOTO_PADDING_ROWS * rowH) : 0;
+    let top: number;
+    if (restoreScroll && restoreScroll.current !== null) {
+      top = restoreScroll.current;
+      restoreScroll.current = null;
+    } else {
+      const firstChange = changeIndices[0];
+      top =
+        firstChange !== undefined ? Math.max(0, firstChange * rowH - GOTO_PADDING_ROWS * rowH) : 0;
+    }
     if (el) el.scrollTop = top;
     setVp((p) => (p.scrollTop === top ? p : { ...p, scrollTop: top }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -299,6 +323,8 @@ function useDiffViewport(
     };
     window.addEventListener(GOTO_CHANGE_EVENT, onGoto);
     return () => window.removeEventListener(GOTO_CHANGE_EVENT, onGoto);
+    // ref 为 ref 对象（引用稳定），无需纳入依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [changeIndices]);
 
   const { start, end } = computeVisibleWindow(lineCount, vp.scrollTop, vp.height, rowH, OVERSCAN);
@@ -557,13 +583,33 @@ export default function SplitDiffGrid({
   onToggleSelectLine,
   onDragSelectLines,
   onApplyHunk,
+  layout = null,
+  onToggleFold,
+  scrollRef,
+  restoreScroll,
 }: SplitDiffGridProps) {
   const rowH = useCodeRowHeight();
+  // 折叠布局：显示项序列 + 行下标 → 显示下标映射（无折叠时恒等）。
+  const displayItems = useMemo(
+    () => layout?.items ?? rows.map((_, i) => ({ kind: "row" as const, rowIndex: i })),
+    [layout, rows],
+  );
+  const changeDisplayIndices = useMemo(() => {
+    if (!layout) return changeRowIndices;
+    const out: number[] = [];
+    for (const i of changeRowIndices) {
+      const d = layout.rowDisplayIndex[i];
+      if (d >= 0) out.push(d);
+    }
+    return out;
+  }, [changeRowIndices, layout]);
   const { ref, handleScroll, start, end, vp } = useDiffViewport(
-    rows.length,
-    changeRowIndices,
+    displayItems.length,
+    changeDisplayIndices,
     rows,
     rowH,
+    scrollRef,
+    restoreScroll,
   );
   const { onJumpToRow, onScrollTo } = useJumpHandlers(ref, rowH);
   const charW = useCharWidth(ref);
@@ -587,26 +633,29 @@ export default function SplitDiffGrid({
     resetKey: rows,
   });
 
-  // 变更块（连续变更行聚合）：修改对 / 纯新增 / 纯删除，供导航条着色。
+  // 变更块（连续变更行聚合，按显示下标）：修改对 / 纯新增 / 纯删除，供导航条着色。
   const blocks = useMemo<ChangeBlock[]>(() => {
-    const kindOf = (i: number): ChangeKind => {
-      const { left, right } = rows[i];
+    const kindOf = (d: number): ChangeKind => {
+      const item = displayItems[d];
+      if (!item || item.kind !== "row") return "modify";
+      const { left, right } = rows[item.rowIndex];
       if (left && right) return "modify";
       if (right) return "add";
       return "remove";
     };
-    return groupChangeBlocks(changeRowIndices, kindOf);
-  }, [changeRowIndices, rows]);
+    return groupChangeBlocks(changeDisplayIndices, kindOf);
+  }, [changeDisplayIndices, displayItems, rows]);
 
   // tooltip：优先新侧行号（对应编辑器里的目标位置）。
   const labelFor = useCallback(
     (b: ChangeBlock) => {
-      const first = rows[b.start];
+      const item = displayItems[b.start];
+      const first = item?.kind === "row" ? rows[item.rowIndex] : undefined;
       const no = first?.right?.lineno ?? first?.left?.lineno;
       const at = no != null ? `第 ${no} 行起` : `第 ${b.start + 1} 行起`;
       return `${KIND_LABEL[b.kind]} · ${at} ${b.count} 行`;
     },
-    [rows],
+    [displayItems, rows],
   );
 
   const blockByStart = useMemo(() => {
@@ -617,11 +666,46 @@ export default function SplitDiffGrid({
 
   const selectable = patchScope !== null;
   const items: ReactNode[] = [];
-  for (let i = start; i < end; i++) {
+  for (let d = start; d < end; d++) {
+    const item = displayItems[d];
+    if (!item) continue;
+    if (item.kind === "fold") {
+      items.push(
+        <div
+          className="diff-fold-row"
+          role="button"
+          tabIndex={0}
+          aria-label={`展开 ${item.hiddenCount} 行未更改内容`}
+          key={`fold-${item.foldIndex}`}
+          style={{ top: d * rowH, height: rowH }}
+          onClick={() => onToggleFold?.(item.foldIndex)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onToggleFold?.(item.foldIndex);
+            }
+          }}
+        >
+          <span className="diff-fold-row__label">{foldLabel(item)}</span>
+        </div>,
+      );
+      continue;
+    }
+    const i = item.rowIndex;
     const row = rows[i];
-    const block = selectable ? blockByStart.get(i) : undefined;
+    const block = selectable ? blockByStart.get(d) : undefined;
+    // 折叠布局下变更块跨显示行 → 收集块内全部真实行下标构造选区。
+    const hunkSelections = () => {
+      if (!block) return [];
+      const indices: number[] = [];
+      for (let bd = block.start; bd < block.start + block.count; bd++) {
+        const bi = displayItems[bd];
+        if (bi?.kind === "row") indices.push(bi.rowIndex);
+      }
+      return buildHunkSelectionsForRowIndices(rows, indices);
+    };
     items.push(
-      <div className="diff-row" role="row" aria-rowindex={i + 1} key={i} style={{ top: i * rowH }}>
+      <div className="diff-row" role="row" aria-rowindex={d + 1} key={i} style={{ top: d * rowH }}>
         <CodeCell
           cell={row.left}
           side="old"
@@ -644,15 +728,9 @@ export default function SplitDiffGrid({
           <HunkActionBar
             patchScope={patchScope}
             patchBusy={patchBusy}
-            onStage={() =>
-              onApplyHunk("stage", buildSplitHunkSelections(rows, block.start, block.count))
-            }
-            onUnstage={() =>
-              onApplyHunk("unstage", buildSplitHunkSelections(rows, block.start, block.count))
-            }
-            onDiscard={() =>
-              onApplyHunk("discard", buildSplitHunkSelections(rows, block.start, block.count))
-            }
+            onStage={() => onApplyHunk("stage", hunkSelections())}
+            onUnstage={() => onApplyHunk("unstage", hunkSelections())}
+            onDiscard={() => onApplyHunk("discard", hunkSelections())}
           />
         )}
       </div>,
@@ -674,11 +752,13 @@ export default function SplitDiffGrid({
             }
           }}
           role="grid"
-          aria-rowcount={rows.length}
+          aria-rowcount={displayItems.length}
         >
           <div
             className="diff-grid__sizer"
-            style={{ height: rows.length * rowH + (hasHScroll ? HSCROLL_RESERVE : 0) }}
+            style={{
+              height: displayItems.length * rowH + (hasHScroll ? HSCROLL_RESERVE : 0),
+            }}
           >
             {items}
           </div>
@@ -703,7 +783,7 @@ export default function SplitDiffGrid({
         />
       </div>
       <ChangeRail
-        lineCount={rows.length}
+        lineCount={displayItems.length}
         rowHeight={rowH}
         blocks={blocks}
         scrollTop={vp.scrollTop}
@@ -727,15 +807,28 @@ export function UnifiedGrid({
   onToggleSelectLine,
   onDragSelectLines,
   onApplyHunk,
+  layout = null,
+  onToggleFold,
+  scrollRef,
+  restoreScroll,
 }: UnifiedGridProps) {
-  const { lines, changeLineIndices } = useMemo(() => buildUnifiedLines(rows), [rows]);
   const rowH = useCodeRowHeight();
+  const displayItems = useMemo(
+    () => layout?.items ?? rows.map((_, i) => ({ kind: "row" as const, rowIndex: i })),
+    [layout, rows],
+  );
+  const { lines, changeLineIndices } = useMemo(
+    () => buildUnifiedLinesFromItems(rows, displayItems),
+    [rows, displayItems],
+  );
 
   const { ref, handleScroll, start, end, vp } = useDiffViewport(
     lines.length,
     changeLineIndices,
-    lines,
+    rows,
     rowH,
+    scrollRef,
+    restoreScroll,
   );
   const { onJumpToRow, onScrollTo } = useJumpHandlers(ref, rowH);
   const charW = useCharWidth(ref);
@@ -781,6 +874,28 @@ export function UnifiedGrid({
   const items: ReactNode[] = [];
   for (let i = start; i < end; i++) {
     const line = lines[i];
+    if (line.fold) {
+      items.push(
+        <div
+          className="diff-fold-row diff-fold-row--unified"
+          role="button"
+          tabIndex={0}
+          aria-label={`展开 ${line.fold.hiddenCount} 行未更改内容`}
+          key={`fold-${line.fold.foldIndex}`}
+          style={{ top: i * rowH, height: rowH }}
+          onClick={() => onToggleFold?.(line.fold!.foldIndex)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onToggleFold?.(line.fold!.foldIndex);
+            }
+          }}
+        >
+          <span className="diff-fold-row__label">{foldLabel(line.fold)}</span>
+        </div>,
+      );
+      continue;
+    }
     const kindClass = line.cell.kind === "context" ? "" : ` u-row--${line.cell.kind}`;
     const tokens = (line.side === "old" ? leftTokens : rightTokens)[line.rowIndex] ?? EMPTY_TOKENS;
     const canSelect = selectable && line.cell.kind !== "context";

@@ -18,6 +18,7 @@ import {
   UnifiedViewIcon,
   UnlinkIcon,
 } from "../Icons";
+import { UnfoldIcon } from "../Icons";
 import DiffFileList from "./DiffFileList";
 import { GOTO_CHANGE_EVENT, type GotoChangeDetail } from "./SplitDiffGrid";
 
@@ -36,6 +37,13 @@ export interface DiffHeaderProps {
   /** 分栏模式下左右是否同步横向滚动。 */
   hLinked: boolean;
   onToggleHLinked: () => void;
+  /** 忽略空白差异开关（docs/11 §三 6.6；切换保留滚动位置）。 */
+  ignoreWhitespace?: boolean;
+  onToggleIgnoreWhitespace?: () => void;
+  /** 折叠区间数量；>0 时显示全部展开 / 折叠入口（docs/11 §三 6.5）。 */
+  foldCount?: number;
+  allFoldsExpanded?: boolean;
+  onToggleExpandAll?: () => void;
   onPrevFile: () => void;
   onNextFile: () => void;
   onSelectFile: (index: number) => void;
@@ -85,6 +93,11 @@ export default function DiffHeader({
   onModeChange,
   hLinked,
   onToggleHLinked,
+  ignoreWhitespace = false,
+  onToggleIgnoreWhitespace,
+  foldCount = 0,
+  allFoldsExpanded = false,
+  onToggleExpandAll,
   onPrevFile,
   onNextFile,
   onSelectFile,
@@ -183,6 +196,32 @@ export default function DiffHeader({
             <ArrowDownIcon />
           </button>
         </div>
+
+        {onToggleIgnoreWhitespace && (
+          <button
+            type="button"
+            className={`diff-header__btn diff-header__ws${ignoreWhitespace ? " is-active" : ""}`}
+            aria-pressed={ignoreWhitespace}
+            aria-label={ignoreWhitespace ? "忽略空白差异（已开启）" : "忽略空白差异（已关闭）"}
+            title={`忽略空白差异：比较时把仅空白不同的行视为未更改${ignoreWhitespace ? "（已开启）" : ""}`}
+            onClick={onToggleIgnoreWhitespace}
+          >
+            <span aria-hidden="true">␣≠</span>
+          </button>
+        )}
+
+        {foldCount > 0 && onToggleExpandAll && (
+          <button
+            type="button"
+            className="diff-header__btn diff-header__fold"
+            aria-pressed={allFoldsExpanded}
+            aria-label={allFoldsExpanded ? "折叠全部未更改区" : "展开全部未更改区"}
+            title={`${allFoldsExpanded ? "折叠" : "展开"}全部未更改区（${foldCount} 处）`}
+            onClick={onToggleExpandAll}
+          >
+            <UnfoldIcon />
+          </button>
+        )}
 
         {mode === "split" && (
           <button

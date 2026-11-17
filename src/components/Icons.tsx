@@ -470,3 +470,13 @@ export function FolderIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/** 展开 / 折叠未更改区。 */
+export function UnfoldIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M2.5 4.5h4M13.5 4.5h-4M2.5 11.5h4M13.5 11.5h-4M4 2.5v4M12 2.5v4M4 9.5v4M12 9.5v4" />
+      <path d="M6.5 8h3" />
+    </Icon>
+  );
+}

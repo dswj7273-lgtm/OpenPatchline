@@ -14,6 +14,13 @@ export interface UnifiedLine {
   /** 源 AlignedRow 下标（token 查找用）。 */
   rowIndex: number;
   side: "old" | "new";
+  /** 折叠占位行（v0.6 / 6.5）：不渲染代码，仅展示展开入口。 */
+  fold?: {
+    foldIndex: number;
+    hiddenCount: number;
+    fromLineNo: number | null;
+    toLineNo: number | null;
+  };
 }
 
 /** 估算单行视觉列数（Tab 计 4 列，宽字符 / 中文计 2 列，ASCII 计 1 列）。 */
@@ -76,9 +83,53 @@ export function buildUnifiedLines(rows: AlignedRow[]): {
   lines: UnifiedLine[];
   changeLineIndices: number[];
 } {
+  return buildUnifiedLinesFromItems(
+    rows,
+    rows.map((_, i) => ({ kind: "row", rowIndex: i }) as const),
+  );
+}
+
+/** 与 buildUnifiedLines 相同，但按显示项（含折叠占位）输出。 */
+export function buildUnifiedLinesFromItems(
+  rows: AlignedRow[],
+  items: ReadonlyArray<
+    | { kind: "row"; rowIndex: number }
+    | {
+        kind: "fold";
+        foldIndex: number;
+        hiddenCount: number;
+        fromLineNo: number | null;
+        toLineNo: number | null;
+      }
+  >,
+): {
+  lines: UnifiedLine[];
+  changeLineIndices: number[];
+} {
   const lines: UnifiedLine[] = [];
   const changeLineIndices: number[] = [];
-  for (let i = 0; i < rows.length; i++) {
+  const pushChangeIdx = () => {
+    const l = lines.length - 1;
+    if (l >= 0 && lines[l].cell.kind !== "context") changeLineIndices.push(l);
+  };
+  for (const item of items) {
+    if (item.kind === "fold") {
+      lines.push({
+        oldNo: null,
+        newNo: null,
+        cell: { kind: "context", lineno: null, content: "", charRanges: [] },
+        rowIndex: -1,
+        side: "old",
+        fold: {
+          foldIndex: item.foldIndex,
+          hiddenCount: item.hiddenCount,
+          fromLineNo: item.fromLineNo,
+          toLineNo: item.toLineNo,
+        },
+      });
+      continue;
+    }
+    const i = item.rowIndex;
     const { left, right } = rows[i];
     if (left && right) {
       if (left.kind === "context") {
@@ -89,18 +140,20 @@ export function buildUnifiedLines(rows: AlignedRow[]): {
           rowIndex: i,
           side: "old",
         });
+        pushChangeIdx();
       } else {
         lines.push({ oldNo: left.lineno, newNo: null, cell: left, rowIndex: i, side: "old" });
+        pushChangeIdx();
         lines.push({ oldNo: null, newNo: right.lineno, cell: right, rowIndex: i, side: "new" });
+        pushChangeIdx();
       }
     } else if (left) {
       lines.push({ oldNo: left.lineno, newNo: null, cell: left, rowIndex: i, side: "old" });
+      pushChangeIdx();
     } else if (right) {
       lines.push({ oldNo: null, newNo: right.lineno, cell: right, rowIndex: i, side: "new" });
+      pushChangeIdx();
     }
-  }
-  for (let l = 0; l < lines.length; l++) {
-    if (lines[l].cell.kind !== "context") changeLineIndices.push(l);
   }
   return { lines, changeLineIndices };
 }
@@ -116,10 +169,21 @@ export function buildSplitHunkSelections(
   start: number,
   count: number,
 ): DiffLineSelection[] {
-  const out: DiffLineSelection[] = [];
+  const indices: number[] = [];
   const end = Math.min(rows.length, start + count);
-  for (let i = Math.max(0, start); i < end; i++) {
+  for (let i = Math.max(0, start); i < end; i++) indices.push(i);
+  return buildHunkSelectionsForRowIndices(rows, indices);
+}
+
+/** 按任意行下标集合构造整块应用选区（折叠布局下由显示块映射回真实行）。 */
+export function buildHunkSelectionsForRowIndices(
+  rows: AlignedRow[],
+  rowIndices: number[],
+): DiffLineSelection[] {
+  const out: DiffLineSelection[] = [];
+  for (const i of rowIndices) {
     const row = rows[i];
+    if (!row) continue;
     const hasLeft = row.left?.kind === "removed";
     const hasRight = row.right?.kind === "added";
     if (hasLeft && hasRight) {

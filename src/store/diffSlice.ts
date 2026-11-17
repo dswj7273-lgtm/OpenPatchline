@@ -30,6 +30,7 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
     selectedDiffFileIndex: 0,
     currentFileDiff: null,
     diffLoading: false,
+    diffIgnoreWhitespace: null,
     conflictPath: null,
     conflictDetail: null,
     conflictLoading: false,
@@ -54,8 +55,11 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
       await get().showDiffFile(index);
     },
 
+    /** 生效的忽略空白选项：视图覆盖优先，否则跟随设置默认值。 */
+    effectiveIgnoreWs: () => get().diffIgnoreWhitespace ?? get().settings.ignoreWhitespaceDefault,
+
     showDiffFile: async (index) => {
-      const { repo, diffScope, diffFiles, settings } = get();
+      const { repo, diffScope, diffFiles } = get();
       if (!repo) {
         set({ error: "当前未打开仓库" });
         return;
@@ -78,7 +82,7 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
           repoId,
           scopeSnapshot,
           file.path,
-          settings.ignoreWhitespaceDefault,
+          get().diffIgnoreWhitespace ?? get().settings.ignoreWhitespaceDefault,
         );
         const latest = get();
         if (
@@ -99,6 +103,14 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
         if (seq === diffReqSeq) {
           set({ diffLoading: false });
         }
+      }
+    },
+
+    setDiffIgnoreWhitespace: async (v) => {
+      if (get().diffIgnoreWhitespace === v) return;
+      set({ diffIgnoreWhitespace: v });
+      if (get().activeView === "diff") {
+        await get().showDiffFile(get().selectedDiffFileIndex);
       }
     },
 
@@ -136,15 +148,8 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
     },
 
     applyDiffSelection: async (action, selections) => {
-      const {
-        repo,
-        diffScope,
-        diffFiles,
-        selectedDiffFileIndex,
-        currentFileDiff,
-        gitBusy,
-        settings,
-      } = get();
+      const { repo, diffScope, diffFiles, selectedDiffFileIndex, currentFileDiff, gitBusy } = get();
+      const ignoreWs = get().diffIgnoreWhitespace ?? get().settings.ignoreWhitespaceDefault;
       if (!repo) {
         set({ error: "当前未打开仓库" });
         return false;
@@ -165,7 +170,7 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
           currentFile.path,
           action,
           selections,
-          settings.ignoreWhitespaceDefault,
+          ignoreWs,
         );
         if (get().repo?.id !== repoId) return false;
 
@@ -189,7 +194,7 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
             repoId,
             diffScope,
             entry.path,
-            settings.ignoreWhitespaceDefault,
+            get().diffIgnoreWhitespace ?? get().settings.ignoreWhitespaceDefault,
           );
           if (get().repo?.id === repoId && get().diffScope === diffScope) {
             set({

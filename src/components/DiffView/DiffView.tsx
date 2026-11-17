@@ -15,6 +15,7 @@ import {
   type SideTokens,
 } from "../../highlighter/workerClient";
 import { matchesKeyId } from "../../keyboard/keymap";
+import { buildFoldLayout, computeFoldRanges, type FoldLayout } from "./foldUtils";
 import { useAppStore } from "../../store/app";
 import type { AlignedRow, DiffLineSelection, DiffPatchAction } from "../../types";
 import { AlertIcon } from "../Icons";
@@ -68,6 +69,16 @@ export function DiffView() {
     return pref === "unified" ? "unified" : "split";
   });
   const [hLinked, setHLinked] = useState(readHLinked);
+  const [foldExpanded, setFoldExpanded] = useState<ReadonlySet<number>>(() => new Set());
+
+  const diffIgnoreWhitespace = useAppStore((s) => s.diffIgnoreWhitespace);
+  const settingsIgnoreWs = useAppStore((s) => s.settings.ignoreWhitespaceDefault);
+  const setDiffIgnoreWhitespace = useAppStore((s) => s.setDiffIgnoreWhitespace);
+  const ignoreWhitespace = diffIgnoreWhitespace ?? settingsIgnoreWs;
+
+  /** 网格滚动容器与一次性恢复值（忽略空白切换时保持滚动位置）。 */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const restoreScrollRef = useRef<number | null>(null);
 
   const [explicitState, setExplicitState] = useState<{
     diff: object | null;
@@ -217,6 +228,38 @@ export function DiffView() {
     [patchScope, highlightedKeys],
   );
 
+  // 折叠布局（v0.6 / 6.5）：文件切换时折叠状态复位。
+  const foldRows = currentFileDiff?.rows;
+  const folds = useMemo(() => (foldRows ? computeFoldRanges(foldRows) : []), [foldRows]);
+  const layout: FoldLayout | null = useMemo(
+    () => (foldRows && folds.length > 0 ? buildFoldLayout(foldRows, folds, foldExpanded) : null),
+    [foldRows, folds, foldExpanded],
+  );
+  useEffect(() => {
+    setFoldExpanded(new Set());
+  }, [currentFileDiff]);
+
+  const allFoldsExpanded = folds.length > 0 && foldExpanded.size >= folds.length;
+  const toggleFold = useCallback((foldIndex: number) => {
+    setFoldExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(foldIndex)) next.delete(foldIndex);
+      else next.add(foldIndex);
+      return next;
+    });
+  }, []);
+  const toggleExpandAll = useCallback(() => {
+    setFoldExpanded((prev) =>
+      prev.size >= folds.length ? new Set() : new Set(folds.map((_, i) => i)),
+    );
+  }, [folds]);
+
+  /** 切换忽略空白：先记录滚动位置，重载后恢复（docs/11 §三 6.6）。 */
+  const onToggleIgnoreWhitespace = useCallback(() => {
+    restoreScrollRef.current = scrollRef.current?.scrollTop ?? 0;
+    void setDiffIgnoreWhitespace(!ignoreWhitespace);
+  }, [ignoreWhitespace, setDiffIgnoreWhitespace]);
+
   const clearSelection = useCallback(() => {
     setExplicitState({ diff: currentFileDiff, keys: new Set() });
     setDragState({ diff: currentFileDiff, keys: new Set() });
@@ -319,6 +362,11 @@ export function DiffView() {
         onModeChange={setMode}
         hLinked={hLinked}
         onToggleHLinked={toggleHLinked}
+        ignoreWhitespace={ignoreWhitespace}
+        onToggleIgnoreWhitespace={onToggleIgnoreWhitespace}
+        foldCount={folds.length}
+        allFoldsExpanded={allFoldsExpanded}
+        onToggleExpandAll={toggleExpandAll}
         onPrevFile={prevDiffFile}
         onNextFile={nextDiffFile}
         onSelectFile={showDiffFile}
@@ -418,6 +466,10 @@ export function DiffView() {
             onToggleSelectLine={onToggleSelectLine}
             onDragSelectLines={onDragSelectLines}
             onApplyHunk={handleApplySelections}
+            layout={layout}
+            onToggleFold={toggleFold}
+            scrollRef={scrollRef}
+            restoreScroll={restoreScrollRef}
           />
         ) : (
           <UnifiedGrid
@@ -430,6 +482,10 @@ export function DiffView() {
             onToggleSelectLine={onToggleSelectLine}
             onDragSelectLines={onDragSelectLines}
             onApplyHunk={handleApplySelections}
+            layout={layout}
+            onToggleFold={toggleFold}
+            scrollRef={scrollRef}
+            restoreScroll={restoreScrollRef}
           />
         )}
       </div>

@@ -178,6 +178,8 @@ export interface DiffSlice {
   selectedDiffFileIndex: number;
   currentFileDiff: FileDiffResult | null;
   diffLoading: boolean;
+  /** 视图级忽略空白覆盖；null = 跟随设置默认值。 */
+  diffIgnoreWhitespace: boolean | null;
   conflictPath: string | null;
   conflictDetail: ConflictFileDetail | null;
   conflictLoading: boolean;
@@ -187,6 +189,8 @@ export interface DiffSlice {
   blameReturnView: "log" | "diff";
   openFileDiff: (scope: DiffScope, files: ChangedFile[], index: number) => Promise<void>;
   showDiffFile: (index: number) => Promise<void>;
+  /** 切换忽略空白并重载当前文件 diff。 */
+  setDiffIgnoreWhitespace: (v: boolean) => Promise<void>;
   nextDiffFile: () => Promise<void>;
   prevDiffFile: () => Promise<void>;
   goBackToLog: () => void;
