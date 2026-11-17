@@ -26,6 +26,29 @@ describe("tokenizer", () => {
     expect(lines[2].some((t) => t.className === "tok-kw")).toBe(true);
   });
 
+  it("tokenizes v0.7 new languages (yaml / sql / shell / ruby / swift / kotlin / php)", () => {
+    // yaml：键名（atom）与字符串着色
+    const yamlTokens = tokenizeDetailed('name: "openpatchline"\n', "yml").tokens[0];
+    expect(yamlTokens.length).toBeGreaterThan(0);
+    // sql：关键字着色
+    const sqlTokens = tokenizeDetailed("SELECT * FROM users;\n", "sql").tokens[0];
+    expect(sqlTokens.some((t) => t.className === "tok-kw")).toBe(true);
+    // shell / ruby / swift / kotlin / php：至少产生 token（非纯文本）
+    for (const [code, ext] of [
+      ["echo hello", "sh"],
+      ["def hello; end", "rb"],
+      ["let x = 1", "swift"],
+      ["fun main() {}", "kt"],
+      ["<?php echo 1; ?>", "php"],
+    ] as const) {
+      const tokens = tokenizeDetailed(code + "\n", ext).tokens[0];
+      expect(tokens.length).toBeGreaterThan(0);
+    }
+    // bash / zsh / kts 扩展别名同样生效
+    expect(tokenizeDetailed("ls -la\n", "bash").tokens[0].length).toBeGreaterThan(0);
+    expect(tokenizeDetailed("val x = 1\n", "kts").tokens[0].length).toBeGreaterThan(0);
+  });
+
   it("returns empty token arrays for unsupported extensions", () => {
     const res = tokenizeDetailed("hello\nworld", "txt");
     expect(res).toEqual({ tokens: [[], []], degraded: false });

@@ -1401,6 +1401,21 @@ pub fn interactive_rebase(
     )))
 }
 
+/// 从指定提交恢复单个文件到工作区并暂存（`git checkout <commit> -- <path>`，
+/// v0.7 / 7.7）。commit id 与路径均先行校验，防止参数注入。
+pub fn checkout_file_from(
+    repo: &git2::Repository,
+    workdir: &Path,
+    commit_id: &str,
+    path: &str,
+) -> AppResult<GitActionResult> {
+    let commit = crate::git_service::find_commit(repo, commit_id)?;
+    let oid = commit.id().to_string();
+    crate::git_service::validate_rel_path(path)?;
+    let output = run_git(workdir, &["checkout", &oid, "--", path])?;
+    action_result(repo, output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2244,5 +2259,29 @@ fn stash_branch_creates_checks_out_and_pops() {
             std::fs::read_to_string(dir.join("a.txt")).unwrap(),
             "line v3\n"
         );
+    }
+
+    /// v0.7 / 7.7：从指定提交恢复单个文件（工作区 + 暂存区）。
+    #[test]
+    fn checkout_file_from_restores_content_and_stages() {
+        let fx = setup_with_bare_remote();
+        let dir = fx.workdir();
+        commit_file(&fx.work, "a.txt", "v1\n", "initial");
+        let old = commit_file(&fx.work, "a.txt", "v1\nv2\n", "add v2");
+        // 再改一次并提交，使 HEAD 版本与 old 不同
+        commit_file(&fx.work, "a.txt", "v1\nv2\nv3\n", "add v3");
+
+        let res = checkout_file_from(&fx.work, &dir, &old, "a.txt").expect("恢复失败");
+        assert_eq!(res.repo.state, RepoState::Clean);
+        // 工作区恢复到 old 版本
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v1\nv2\n");
+        // 已直接进入暂存区（git checkout <commit> -- path 的语义）
+        let statuses = git_service::status(&fx.work).unwrap();
+        let entry = statuses.iter().find(|s| s.path == "a.txt").unwrap();
+        assert_eq!(entry.staged, Some(crate::types::ChangeType::Modified));
+        assert_eq!(entry.unstaged, None);
+
+        // 越界路径拒绝
+        assert!(checkout_file_from(&fx.work, &dir, &old, "../escape.txt").is_err());
     }
 }

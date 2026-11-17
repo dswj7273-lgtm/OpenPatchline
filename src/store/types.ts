@@ -277,6 +277,8 @@ export interface WorkspaceSlice {
   revertCommit: (commitId: string) => Promise<void>;
   resetHead: (target: string, mode: ResetMode) => Promise<void>;
   discardFile: (path: string) => Promise<void>;
+  /** 从指定提交恢复单个文件（覆盖工作区，脏文件先拒绝，v0.7 / 7.7）。 */
+  restoreFileFromCommit: (commitId: string, path: string) => Promise<boolean>;
   discardAllChanges: () => Promise<void>;
   amendCommit: (message: string) => Promise<boolean>;
   stashPush: (message?: string | null) => Promise<boolean>;

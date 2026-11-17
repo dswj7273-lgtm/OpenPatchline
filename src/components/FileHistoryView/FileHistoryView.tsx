@@ -88,6 +88,7 @@ export function FileHistoryView() {
   const openFileBlame = useAppStore((s) => s.openFileBlame);
   const closeFileHistory = useAppStore((s) => s.closeFileHistory);
   const selectCommit = useAppStore((s) => s.selectCommit);
+  const restoreFileFrom = useAppStore((s) => s.restoreFileFromCommit);
   const rowMenu = useContextMenu();
 
   useEffect(() => {
@@ -116,6 +117,11 @@ export function FileHistoryView() {
 
   const menuFor = (entry: FileHistoryEntry): ContextMenuItem[] => [
     { key: "diff", label: "查看该提交的差异", onSelect: () => openEntry(entry) },
+    {
+      key: "restore",
+      label: "恢复此文件到该版本",
+      onSelect: () => void restoreFileFrom(entry.commitId, entry.path),
+    },
     { key: "blame", label: "Blame 该版本", onSelect: () => blameEntry(entry) },
     {
       key: "jump",

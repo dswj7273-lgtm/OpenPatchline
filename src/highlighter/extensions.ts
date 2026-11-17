@@ -27,6 +27,18 @@ export const HIGHLIGHTABLE_EXTENSIONS: ReadonlySet<string> = new Set([
   "go",
   "md",
   "markdown",
+  // —— v0.7 / 7.8 ——
+  "yml",
+  "yaml",
+  "sh",
+  "bash",
+  "zsh",
+  "sql",
+  "swift",
+  "rb",
+  "php",
+  "kt",
+  "kts",
 ]);
 
 /** 取文件路径的小写扩展名（不含点）；无扩展名返回空字符串。 */

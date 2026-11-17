@@ -150,7 +150,8 @@ pub fn run() {
             commands::get_stash_files,
             commands::list_branches_containing,
             commands::stash_branch,
-            commands::interactive_rebase
+            commands::interactive_rebase,
+            commands::checkout_file_from
         ])
         // watcher 需要 AppHandle（emit 事件），在 setup 阶段注册为全局状态；
         // 同时构建原生菜单（快捷键在 macOS 菜单栏可见）并预加载应用设置。

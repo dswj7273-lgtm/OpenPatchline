@@ -100,10 +100,13 @@ function CommitFileRow({
   file,
   onClick,
   onBlame,
+  onRestore,
 }: {
   file: ChangedFile;
   onClick: () => void;
   onBlame?: () => void;
+  /** 从该提交恢复此文件到工作区（v0.7 / 7.7）。 */
+  onRestore?: () => void;
 }) {
   const { dir, base } = splitPath(file.path);
   const canBlame =
@@ -137,6 +140,17 @@ function CommitFileRow({
           <HistoryIcon />
         </button>
       )}
+      {onRestore && (
+        <button
+          type="button"
+          className="icon-btn cd-file-restore"
+          aria-label={`从该提交恢复 ${file.path}`}
+          title="从该提交恢复此文件（覆盖工作区并暂存；有未提交修改时会拒绝）"
+          onClick={onRestore}
+        >
+          <UndoIcon />
+        </button>
+      )}
     </div>
   );
 }
@@ -146,11 +160,13 @@ function DiffFileListSection({
   files,
   onOpenFile,
   onBlameFile,
+  onRestoreFile,
 }: {
   title: string;
   files: ChangedFile[];
   onOpenFile: (index: number) => void;
   onBlameFile?: (file: ChangedFile) => void;
+  onRestoreFile?: (file: ChangedFile) => void;
 }) {
   const totals = useMemo(() => summarizeFiles(files), [files]);
   return (
@@ -176,6 +192,7 @@ function DiffFileListSection({
               file={file}
               onClick={() => onOpenFile(i)}
               onBlame={onBlameFile ? () => onBlameFile(file) : undefined}
+              onRestore={onRestoreFile ? () => onRestoreFile(file) : undefined}
             />
           ))
         )}
@@ -218,6 +235,7 @@ export function CommitDetail({ onOpenRebase }: { onOpenRebase?: () => void }) {
   const createBranch = useAppStore((s) => s.createBranch);
   const createTag = useAppStore((s) => s.createTag);
   const resetHead = useAppStore((s) => s.resetHead);
+  const restoreFileFromCommit = useAppStore((s) => s.restoreFileFromCommit);
 
   const [copied, setCopied] = useState(false);
   const [inlineMode, setInlineMode] = useState<"branch" | "tag" | null>(null);
@@ -551,6 +569,7 @@ export function CommitDetail({ onOpenRebase }: { onOpenRebase?: () => void }) {
         files={commitFiles}
         onOpenFile={(i) => void openFileDiff({ kind: "commit", commitId: c.id }, commitFiles, i)}
         onBlameFile={(file) => void openFileBlame(file.path, c.id, { returnView: "log" })}
+        onRestoreFile={(file) => void restoreFileFromCommit(c.id, file.path)}
       />
     </aside>
   );

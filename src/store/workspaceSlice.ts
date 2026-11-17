@@ -654,6 +654,28 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
       });
     },
 
+    restoreFileFromCommit: async (commitId, path) =>
+      runExclusive("checkout", "restoreFileFromCommit", {}, async (repoId) => {
+        // 安全闸：该文件存在未提交修改时拒绝，避免静默覆盖丢失更改。
+        const dirty = get().fileStatus.find(
+          (f) => f.path === path && (f.conflicted || f.staged !== null || f.unstaged !== null),
+        );
+        if (dirty) {
+          set({
+            error: `${path} 存在未提交修改，恢复会覆盖这些更改；请先提交、贮藏或丢弃后再从历史版本恢复`,
+          });
+          return false;
+        }
+        await api.checkoutFileFrom(repoId, commitId, path);
+        if (get().repo?.id !== repoId) return false;
+        await get().loadFileStatus();
+        if (get().error === null) {
+          set({ notice: `已从 ${commitId.slice(0, 7)} 恢复 ${path}（已暂存）` });
+          return true;
+        }
+        return false;
+      }),
+
     discardFile: async (path) => {
       await runExclusive("discard", "discardFile", {}, async (repoId) => {
         await api.discardFile(repoId, path);

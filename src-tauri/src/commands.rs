@@ -1311,3 +1311,21 @@ pub async fn interactive_rebase(
     .await
     .map_err(join_error)?
 }
+
+/// 从指定提交恢复单个文件到工作区并暂存（v0.7 / 7.7）。
+#[tauri::command]
+pub async fn checkout_file_from(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    commit_id: String,
+    path: String,
+) -> AppResult<GitActionResult> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<GitActionResult> {
+        let entry = lock_entry(&entry);
+        let workdir = workdir_of(&entry.repo)?;
+        git_remote::checkout_file_from(&entry.repo, &workdir, &commit_id, &path)
+    })
+    .await
+    .map_err(join_error)?
+}

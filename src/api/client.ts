@@ -169,6 +169,15 @@ export function interactiveRebase(
   return invoke<GitActionResult>("interactive_rebase", { repoId, plan });
 }
 
+/** 从指定提交恢复单个文件到工作区并暂存（v0.7 / 7.7）。 */
+export function checkoutFileFrom(
+  repoId: string,
+  commitId: string,
+  path: string,
+): Promise<GitActionResult> {
+  return invoke<GitActionResult>("checkout_file_from", { repoId, commitId, path });
+}
+
 /** 列出本地与远程分支（含当前标记、上游与 ahead/behind）。 */
 export function listBranches(repoId: string): Promise<BranchInfo[]> {
   return invoke<BranchInfo[]>("list_branches", { repoId });
