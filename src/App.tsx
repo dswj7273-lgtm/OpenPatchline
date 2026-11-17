@@ -11,6 +11,7 @@ import { listen } from "@tauri-apps/api/event";
 import { BlameView } from "./components/BlameView/BlameView";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { ConflictView } from "./components/ConflictView/ConflictView";
+import { FileHistoryView } from "./components/FileHistoryView/FileHistoryView";
 import * as DiffViewModule from "./components/DiffView/DiffView";
 import { GitLogView } from "./components/GitLogView/GitLogView";
 import {
@@ -774,6 +775,8 @@ export default function App() {
             <ConflictView />
           ) : activeView === "blame" ? (
             <BlameView />
+          ) : activeView === "history" ? (
+            <FileHistoryView />
           ) : (
             <GitLogView />
           )}

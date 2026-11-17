@@ -413,6 +413,8 @@ export function DiffView() {
     currentFileDiff.changeType !== "deleted" &&
     currentFileDiff.changeType !== "untracked" &&
     currentStatus?.unstaged !== "untracked" &&
+    // stash 预览是贮藏快照，Blame 会错位到工作区版本，不提供入口
+    diffScope?.kind !== "stash" &&
     Boolean(blameTargetPath);
   const blameCommitId =
     diffScope?.kind === "commit"

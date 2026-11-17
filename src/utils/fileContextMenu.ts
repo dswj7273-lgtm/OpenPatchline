@@ -43,6 +43,13 @@ export function openFileContextMenu(
       },
     },
     {
+      key: "history",
+      label: "查看文件历史",
+      onSelect: () => {
+        void useAppStore.getState().openFileHistory(path);
+      },
+    },
+    {
       key: "copy-path",
       label: "复制路径",
       onSelect: () => {

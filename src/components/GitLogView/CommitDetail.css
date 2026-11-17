@@ -517,3 +517,68 @@
 .cd-range-swap {
   justify-content: center;
 }
+
+/* 父提交 / 所在分支（v0.7 / 7.5） */
+.cd-relations {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 6px;
+}
+
+.cd-relations-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cd-relations-label {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.cd-relations-items {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cd-parent-chip {
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--surface-2);
+  padding: 1px 6px;
+  font-family: var(--font-code);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.cd-parent-chip:hover {
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.cd-branch-chip {
+  border-radius: 5px;
+  padding: 1px 7px;
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+  font-size: 10.5px;
+  color: var(--text-primary);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cd-branch-chip--more {
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+  color: var(--text-muted);
+}

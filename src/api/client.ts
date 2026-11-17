@@ -19,6 +19,7 @@ import type {
   FetchResult,
   FileBlameResult,
   FileDiffResult,
+  FileHistoryEntry,
   FileStatus,
   GitActionResult,
   GraphPage,
@@ -368,6 +369,30 @@ export function openFileInEditor(
   line: number | null = null,
 ): Promise<void> {
   return invoke<void>("open_file_in_editor", { repoId, path, line });
+}
+
+/** 读取单个文件的提交历史（--follow 跨重命名追踪）。 */
+export function getFileHistory(
+  repoId: string,
+  path: string,
+  limit = 500,
+): Promise<FileHistoryEntry[]> {
+  return invoke<FileHistoryEntry[]>("get_file_history", { repoId, path, limit });
+}
+
+/** 基于贮藏条目创建并切换分支（建分支 + 检出 + 应用，成功后弹出）。 */
+export function stashBranch(repoId: string, name: string, index: number): Promise<GitActionResult> {
+  return invoke<GitActionResult>("stash_branch", { repoId, name, index });
+}
+
+/** 列出包含指定提交的分支（本地 + 远程）。 */
+export function listBranchesContaining(repoId: string, commitId: string): Promise<string[]> {
+  return invoke<string[]>("list_branches_containing", { repoId, commitId });
+}
+
+/** 列出贮藏条目的变更文件（stash 提交 vs 基准父提交）。 */
+export function getStashFiles(repoId: string, index: number): Promise<ChangedFile[]> {
+  return invoke<ChangedFile[]>("get_stash_files", { repoId, index });
 }
 
 /** 弹出原生文件选择框选取 git 可执行文件；取消返回 null。 */

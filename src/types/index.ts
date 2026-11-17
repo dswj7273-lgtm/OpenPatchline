@@ -188,14 +188,16 @@ export interface FileStatus {
 }
 
 /** diff 范围类别。 */
-export type DiffScopeKind = "commit" | "range" | "staged" | "workdir";
+export type DiffScopeKind = "commit" | "range" | "staged" | "workdir" | "stash";
 
 /** diff 查询范围（get_file_diff 参数）。 */
 export type DiffScope =
   | { kind: "commit"; commitId: string }
   | { kind: "range"; baseRef: string; targetRef: string }
   | { kind: "staged" }
-  | { kind: "workdir" };
+  | { kind: "workdir" }
+  /** 贮藏条目预览：stash 提交 vs 基准父提交（v0.7 / 7.4）。 */
+  | { kind: "stash"; stashIndex: number };
 
 /** 范围对比展示信息（用于日志面板双提交或分支对比）。 */
 export interface CompareRange {
@@ -417,3 +419,17 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   externalEditorCommand: null,
   gitExecutablePath: null,
 };
+
+/** 单个文件的提交历史条目（--follow 跨重命名追踪，v0.7 / 7.1）。 */
+export interface FileHistoryEntry {
+  commitId: string;
+  shortId: string;
+  authorName: string;
+  timestamp: number;
+  summary: string;
+  changeType: ChangeType;
+  /** 该提交中此文件的实际路径（重命名后的新路径）。 */
+  path: string;
+  /** 重命名来源路径；仅 changeType === "renamed" 时非空。 */
+  oldPath: string | null;
+}

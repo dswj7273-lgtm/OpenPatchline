@@ -1726,4 +1726,46 @@ mod tests {
         }
         assert!(!manager.cancel("missing-repo"));
     }
+
+#[test]
+fn stash_branch_creates_checks_out_and_pops() {
+    let fx = setup_with_bare_remote();
+    let dir = fx.workdir();
+    commit_file(&fx.work, "base.txt", "v1\n", "base commit");
+
+    // 贮藏一个修改 + 未跟踪文件
+    std::fs::write(dir.join("base.txt"), "v1\ndirty\n").unwrap();
+    std::fs::write(dir.join("new.txt"), "staged-in-stash\n").unwrap();
+    stash_push(&fx.work, &dir, Some("wip feature")).expect("stash_push 失败");
+    assert_eq!(std::fs::read_to_string(dir.join("base.txt")).unwrap(), "v1\n");
+
+    // 从贮藏建分支：检出基准提交、应用贮藏、成功后弹出
+    let res = stash_branch(&fx.work, &dir, "feature/from-stash", 0).expect("stash_branch 失败");
+    assert_eq!(res.repo.head_branch.as_deref(), Some("feature/from-stash"));
+    assert!(dir.join("new.txt").exists());
+    assert!(std::fs::read_to_string(dir.join("base.txt")).unwrap().contains("dirty"));
+    assert!(list_stashes(&dir).unwrap().is_empty());
+
+    // 非法分支名被拒绝
+    assert!(stash_branch(&fx.work, &dir, "bad name", 0).is_err());
+}
+}
+
+/// 基于贮藏条目创建并切换分支（`git stash branch <name> stash@{n}`，v0.7 / 7.4）：
+/// 在贮藏时的基准提交上建分支、检出并应用贮藏，成功后自动弹出该条目。
+pub fn stash_branch(
+    repo: &git2::Repository,
+    workdir: &Path,
+    name: &str,
+    index: usize,
+) -> AppResult<GitActionResult> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().any(char::is_whitespace) {
+        return Err(AppError::InvalidArg(
+            "分支名不能包含空白字符".to_string(),
+        ));
+    }
+    let stash_ref = format!("stash@{{{index}}}");
+    let output = run_git(workdir, &["stash", "branch", name, &stash_ref])?;
+    action_result(repo, output)
 }

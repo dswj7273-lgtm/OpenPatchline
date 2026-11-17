@@ -13,6 +13,7 @@ import type {
   CommitMetadata,
   CommitSignatureInfo,
   CompareRange,
+  FileHistoryEntry,
   ConflictFileDetail,
   DiffLineSelection,
   DiffPatchAction,
@@ -33,7 +34,13 @@ import type {
 } from "../types";
 
 /** 主区域视图。 */
-export type ActiveView = "log" | "diff" | "conflict" | "blame";
+export type ActiveView = "log" | "diff" | "conflict" | "blame" | "history";
+
+/** Diff 视图关闭（Esc / 按钮）后返回的目标视图（v0.7）。 */
+export type DiffReturnView = "log" | "history" | "blame";
+
+/** Blame 视图关闭后返回的目标视图（v0.7：可来自文件历史）。 */
+export type BlameReturnView = "log" | "diff" | "history";
 
 export type { Theme, ThemePreference };
 
@@ -128,6 +135,15 @@ export interface SettingsSlice {
   syncSystemTheme: () => void;
 }
 
+/** 文件历史视图（v0.7 / 7.1）。 */
+export interface HistorySlice {
+  historyPath: string | null;
+  historyEntries: FileHistoryEntry[];
+  historyLoading: boolean;
+  openFileHistory: (path: string) => Promise<void>;
+  closeFileHistory: () => void;
+}
+
 /** 全局浮层 UI（设置弹窗 / 命令面板 / 轻量 Rebase 弹窗）。 */
 export interface UiSlice {
   settingsOpen: boolean;
@@ -173,6 +189,8 @@ export interface LogSlice {
 
 export interface DiffSlice {
   activeView: ActiveView;
+  /** Diff 关闭后的返回视图：从历史 / Blame 打开时返回来源（v0.7）。 */
+  diffReturnView: DiffReturnView;
   diffScope: DiffScope | null;
   diffFiles: ChangedFile[];
   selectedDiffFileIndex: number;
@@ -186,8 +204,13 @@ export interface DiffSlice {
   blameResult: FileBlameResult | null;
   blameLoading: boolean;
   blameHistory: Array<{ path: string; commitId: string | null }>;
-  blameReturnView: "log" | "diff";
-  openFileDiff: (scope: DiffScope, files: ChangedFile[], index: number) => Promise<void>;
+  blameReturnView: BlameReturnView;
+  openFileDiff: (
+    scope: DiffScope,
+    files: ChangedFile[],
+    index: number,
+    opts?: { returnView?: DiffReturnView },
+  ) => Promise<void>;
   showDiffFile: (index: number) => Promise<void>;
   /** 切换忽略空白并重载当前文件 diff。 */
   setDiffIgnoreWhitespace: (v: boolean) => Promise<void>;
@@ -208,7 +231,7 @@ export interface DiffSlice {
   openFileBlame: (
     path: string,
     commitId?: string | null,
-    opts?: { pushHistory?: boolean; returnView?: "log" | "diff" },
+    opts?: { pushHistory?: boolean; returnView?: BlameReturnView },
   ) => Promise<void>;
   goBackBlame: () => Promise<void>;
   closeBlame: () => void;
@@ -259,10 +282,20 @@ export interface WorkspaceSlice {
   stashPush: (message?: string | null) => Promise<boolean>;
   stashApply: (index: number, pop: boolean) => Promise<void>;
   stashDrop: (index: number) => Promise<void>;
+  /** 预览贮藏条目差异（stash 提交 vs 基准父提交，v0.7 / 7.4）。 */
+  previewStash: (index: number) => Promise<void>;
+  /** 基于贮藏条目创建并切换分支（v0.7 / 7.4）。 */
+  stashBranch: (name: string, index: number) => Promise<boolean>;
   listRebaseCommits: (limit?: number) => Promise<RebaseCommitEntry[]>;
   rewriteRecentCommits: (plan: RebasePlanEntry[]) => Promise<boolean>;
 }
 
-export type AppState = RepoSlice & LogSlice & DiffSlice & WorkspaceSlice & SettingsSlice & UiSlice;
+export type AppState = RepoSlice &
+  LogSlice &
+  DiffSlice &
+  WorkspaceSlice &
+  SettingsSlice &
+  UiSlice &
+  HistorySlice;
 
 export type AppSlice<T> = StateCreator<AppState, [], [], T>;

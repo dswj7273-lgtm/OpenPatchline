@@ -182,6 +182,8 @@ export function BlameView() {
         },
       ],
       0,
+      // Esc / 关闭 Diff 返回 Blame（v0.7 / 7.2 联动）
+      { returnView: "blame" },
     );
   };
 
@@ -231,7 +233,11 @@ export function BlameView() {
             </button>
           )}
           <button type="button" className="btn blame-btn" onClick={closeBlame}>
-            {blameReturnView === "diff" ? "返回 Diff" : "返回日志"}
+            {blameReturnView === "diff"
+              ? "返回 Diff"
+              : blameReturnView === "history"
+                ? "返回历史"
+                : "返回日志"}
           </button>
           <button
             type="button"

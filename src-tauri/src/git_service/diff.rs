@@ -474,3 +474,61 @@ fn is_binary_blob(repo: &git2::Repository, oid: git2::Oid) -> bool {
         Err(_) => false,
     }
 }
+
+/// 解析 stash@{index} 对应的贮藏提交（refs/stash reflog 自新至旧第 index 条）。
+fn stash_commit<'r>(repo: &'r git2::Repository, index: u32) -> AppResult<git2::Commit<'r>> {
+    let reflog = repo
+        .reflog("refs/stash")
+        .map_err(|e| AppError::NotFound(format!("读取贮藏栈失败（无贮藏条目？）: {e}")))?;
+    let count = reflog.len();
+    let pos = count
+        .checked_sub(index as usize + 1)
+        .ok_or_else(|| AppError::NotFound(format!("stash@{{{index}}} 不存在")))?;
+    let oid = reflog
+        .get(pos)
+        .ok_or_else(|| AppError::NotFound(format!("stash@{{{index}}} 不存在")))?
+        .id_new();
+    repo.find_commit(oid)
+        .map_err(|e| AppError::Git(format!("读取贮藏提交失败: {e}")))
+}
+
+/// 贮藏条目变更文件列表：stash 提交 vs 其基准父提交（`git stash show` 口径）。
+pub fn changed_files_stash(repo: &git2::Repository, index: u32) -> AppResult<Vec<ChangedFile>> {
+    let stash = stash_commit(repo, index)?;
+    let base_tree = stash
+        .parent(0)
+        .map_err(|e| AppError::Git(format!("读取贮藏基准提交失败: {e}")))?
+        .tree()
+        .map_err(|e| AppError::Git(format!("读取基准提交树失败: {e}")))?;
+    let stash_tree = stash
+        .tree()
+        .map_err(|e| AppError::Git(format!("读取贮藏提交树失败: {e}")))?;
+    changed_files_between_trees(repo, Some(&base_tree), Some(&stash_tree), &format!("stash@{{{index}}}"))
+}
+
+/// 贮藏条目中单个文件的左右分栏 diff（stash 提交 vs 基准父提交）。
+pub fn file_diff_stash(
+    repo: &git2::Repository,
+    index: u32,
+    path: &str,
+    ignore_ws: bool,
+) -> AppResult<FileDiffResult> {
+    validate_rel_path(path)?;
+    let stash = stash_commit(repo, index)?;
+    let base_tree = stash
+        .parent(0)
+        .map_err(|e| AppError::Git(format!("读取贮藏基准提交失败: {e}")))?
+        .tree()
+        .map_err(|e| AppError::Git(format!("读取基准提交树失败: {e}")))?;
+    let stash_tree = stash
+        .tree()
+        .map_err(|e| AppError::Git(format!("读取贮藏提交树失败: {e}")))?;
+    file_diff_between_trees(
+        repo,
+        Some(&base_tree),
+        Some(&stash_tree),
+        path,
+        &format!("stash@{{{index}}}"),
+        ignore_ws,
+    )
+}

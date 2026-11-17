@@ -81,6 +81,8 @@ function scopePillText(scope: DiffScope | null, scopeLabel?: string | null): str
       return scope.commitId.slice(0, 7);
     case "range":
       return scopeLabel || `${scope.baseRef.slice(0, 7)} → ${scope.targetRef.slice(0, 7)}`;
+    case "stash":
+      return `stash@{${scope.stashIndex}}`;
   }
 }
 

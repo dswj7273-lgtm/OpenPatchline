@@ -1186,3 +1186,18 @@
   gap: 8px;
   flex: none;
 }
+
+/* 贮藏建分支内联输入（v0.7 / 7.4） */
+.gitlog-stash-branch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.gitlog-stash-branch .input {
+  flex: 1;
+  min-width: 0;
+}

@@ -418,6 +418,8 @@ pub enum DiffScopeKind {
     Staged,
     /// 工作区 vs 暂存区（或 HEAD）。
     Workdir,
+    /// 贮藏条目预览：stash 提交 vs 其基准父提交（v0.7 / 7.4）。
+    Stash,
 }
 
 /// diff 查询范围（命令 `get_file_diff` 的参数）。
@@ -434,6 +436,9 @@ pub struct DiffScope {
     /// 范围对比目标引用 / 提交 id；仅 `kind == Range` 时为 Some。
     #[serde(default)]
     pub target_ref: Option<String>,
+    /// 贮藏条目下标；仅 `kind == Stash` 时为 Some。
+    #[serde(default)]
+    pub stash_index: Option<u32>,
 }
 
 /// Hunk / 行级局部变更应用动作。
@@ -589,4 +594,22 @@ pub struct FileBlameResult {
     pub too_large: bool,
     pub commits: std::collections::HashMap<String, BlameCommitInfo>,
     pub lines: Vec<BlameLine>,
+}
+
+/// 单个文件的提交历史条目（`--follow` 跨重命名追踪，v0.7 / 7.1）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileHistoryEntry {
+    pub commit_id: String,
+    pub short_id: String,
+    pub author_name: String,
+    pub timestamp: i64,
+    /// 提交首行摘要。
+    pub summary: String,
+    /// 该提交中此文件的变更类型。
+    pub change_type: ChangeType,
+    /// 该提交中此文件的实际路径（重命名后的新路径）。
+    pub path: String,
+    /// 重命名来源路径；仅 change_type == renamed 时为 Some。
+    pub old_path: Option<String>,
 }

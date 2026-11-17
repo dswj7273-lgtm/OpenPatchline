@@ -38,9 +38,9 @@ use crate::repo_manager::{RepoManager, lock_entry};
 use crate::types::{
     BranchInfo, ChangedFile, CommitMetadata, CommitSignatureInfo, ConflictFileDetail,
     DiffLineSelection, DiffPatchAction, DiffScope, DiffScopeKind, FetchResult, FileBlameResult,
-    FileDiffResult, FileStatus, GitActionResult, GitProgressEvent, GraphPage, LogFilter,
-    OpenRepositoryOutcome, PullResult, PushResult, RebaseCommitEntry, RebasePlanEntry, RecentRepo,
-    RepoInfo, StashEntry,
+    FileDiffResult, FileHistoryEntry, FileStatus, GitActionResult, GitProgressEvent, GraphPage,
+    LogFilter, OpenRepositoryOutcome, PullResult, PushResult, RebaseCommitEntry, RebasePlanEntry,
+    RecentRepo, RepoInfo, StashEntry,
 };
 use crate::watcher::RepoWatcher;
 
@@ -315,6 +315,11 @@ pub async fn get_file_diff(
             "scope.kind 为 range 时必须提供 baseRef 与 targetRef".to_string(),
         ));
     }
+    if matches!(scope.kind, DiffScopeKind::Stash) && scope.stash_index.is_none() {
+        return Err(AppError::InvalidArg(
+            "scope.kind 为 stash 时必须提供 stashIndex".to_string(),
+        ));
+    }
     let ignore_ws = ignore_whitespace.unwrap_or(false);
     let entry = state.inner().clone().entry(&repo_id)?;
     tauri::async_runtime::spawn_blocking(move || -> AppResult<FileDiffResult> {
@@ -335,6 +340,12 @@ pub async fn get_file_diff(
             ),
             DiffScopeKind::Staged => git_service::file_diff_staged(&entry.repo, &path, ignore_ws),
             DiffScopeKind::Workdir => git_service::file_diff_workdir(&entry.repo, &path, ignore_ws),
+            DiffScopeKind::Stash => git_service::file_diff_stash(
+                &entry.repo,
+                scope.stash_index.unwrap_or(0),
+                &path,
+                ignore_ws,
+            ),
         }
     })
     .await
@@ -1211,6 +1222,73 @@ pub async fn pick_git_executable(app: tauri::AppHandle) -> AppResult<Option<Stri
             .blocking_pick_file()
             .and_then(|p| p.into_path().ok())
             .map(|p| p.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 读取单个文件的提交历史（`--follow` 跨重命名追踪，v0.7 / 7.1）。
+#[tauri::command]
+pub async fn get_file_history(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    path: String,
+    limit: Option<usize>,
+) -> AppResult<Vec<FileHistoryEntry>> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<Vec<FileHistoryEntry>> {
+        let entry = lock_entry(&entry);
+        git_service::file_history(&entry.repo, &path, limit.unwrap_or(500))
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 列出贮藏条目的变更文件（stash 提交 vs 基准父提交，v0.7 / 7.4）。
+#[tauri::command]
+pub async fn get_stash_files(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    index: u32,
+) -> AppResult<Vec<ChangedFile>> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<Vec<ChangedFile>> {
+        let entry = lock_entry(&entry);
+        git_service::changed_files_stash(&entry.repo, index)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 列出包含指定提交的分支（v0.7 / 7.5）。
+#[tauri::command]
+pub async fn list_branches_containing(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    commit_id: String,
+) -> AppResult<Vec<String>> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<Vec<String>> {
+        let entry = lock_entry(&entry);
+        git_service::branches_containing(&entry.repo, &commit_id)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 基于贮藏条目创建并切换分支（建分支 + 检出 + 应用，成功后弹出，v0.7 / 7.4）。
+#[tauri::command]
+pub async fn stash_branch(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    name: String,
+    index: usize,
+) -> AppResult<GitActionResult> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<GitActionResult> {
+        let entry = lock_entry(&entry);
+        let workdir = workdir_of(&entry.repo)?;
+        git_remote::stash_branch(&entry.repo, &workdir, &name, index)
     })
     .await
     .map_err(join_error)?

@@ -927,6 +927,7 @@ fn workdir_scope() -> DiffScope {
         commit_id: None,
         base_ref: None,
         target_ref: None,
+        stash_index: None,
     }
 }
 
@@ -936,6 +937,7 @@ fn staged_scope() -> DiffScope {
         commit_id: None,
         base_ref: None,
         target_ref: None,
+        stash_index: None,
     }
 }
 
@@ -1202,6 +1204,7 @@ fn partial_patch_handles_crlf_eof_newline_untracked_and_rename() {
                 commit_id: Some("HEAD".into()),
                 base_ref: None,
                 target_ref: None,
+                stash_index: None,
             },
             "new_name.txt",
             DiffPatchAction::Stage,
@@ -1679,4 +1682,108 @@ fn generate_patch_for_workdir_and_staged() {
     index.write().unwrap();
     let staged = generate_file_patch(&repo, &staged_scope(), "a.txt").expect("staged 补丁失败");
     assert!(staged.contains("+TWO2"));
+}
+
+/// v0.7 / 7.1：文件历史跨重命名追踪 + 变更类型正确。
+#[test]
+fn file_history_follows_rename() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    let c1 = commit_file(&repo, "old_name.txt", "one\ntwo\n", "create old");
+    // c2: 修改内容（保留路径）
+    let c2 = commit_file(&repo, "old_name.txt", "one\ntwo\nthree\n", "edit old");
+    // c3: 重命名（内容不变 → rename 检测）
+    rename_on_disk(&repo, "old_name.txt", "new_name.txt");
+    commit_rename(&repo, "old_name.txt", "new_name.txt", "rename to new");
+    // c4: 修改新路径
+    let c4 = commit_file(&repo, "new_name.txt", "one\ntwo\nthree\nfour\n", "edit new");
+
+    // 按新路径追溯：应命中 c4、c3(rename)、c2、c1 —— 跨越重命名继续追踪旧路径。
+    let hist = file_history(&repo, "new_name.txt", 100).expect("file_history 失败");
+    let ids: Vec<&str> = hist.iter().map(|e| e.commit_id.as_str()).collect();
+    assert_eq!(ids, vec![c4.as_str(), ids[1], c2.as_str(), c1.as_str()]);
+    assert_eq!(hist.len(), 4);
+    // 重命名条目：change_type = renamed 且给出旧路径
+    let rename_entry = &hist[1];
+    assert_eq!(rename_entry.change_type, ChangeType::Renamed);
+    assert_eq!(rename_entry.old_path.as_deref(), Some("old_name.txt"));
+    assert_eq!(rename_entry.path, "new_name.txt");
+    // 其余条目 change_type 正确、old_path = None；c1 为初始创建（Added）
+    assert_eq!(hist[0].change_type, ChangeType::Modified);
+    assert_eq!(hist[0].old_path, None);
+    assert_eq!(hist[2].change_type, ChangeType::Modified);
+    assert_eq!(hist[3].change_type, ChangeType::Added);
+    // 摘要与作者
+    assert_eq!(hist[0].summary, "edit new");
+
+    // 未被任何提交触碰的文件 → 空历史
+    let empty = file_history(&repo, "nonexistent.txt", 100).unwrap();
+    assert!(empty.is_empty());
+
+    // limit 截断
+    let limited = file_history(&repo, "new_name.txt", 2).unwrap();
+    assert_eq!(limited.len(), 2);
+}
+
+/// v0.7 / 7.4：stash 变更文件与单文件 diff 与 `git stash show` 口径一致。
+#[test]
+fn stash_files_and_diff_match_git_show() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    let _c1 = commit_file(&repo, "a.txt", "one\ntwo\n", "init");
+    // 修改 a.txt 并贮藏（git stash push -u）
+    std::fs::write(dir.path().join("a.txt"), "one\nTWO\n").unwrap();
+    let out = std::process::Command::new("git")
+        .current_dir(dir.path())
+        .args(["stash", "push", "-u", "-m", "wip"])
+        .output()
+        .expect("git stash push 失败");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let files = changed_files_stash(&repo, 0).expect("changed_files_stash 失败");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "a.txt");
+    assert_eq!(files[0].change_type, ChangeType::Modified);
+
+    let diff = file_diff_stash(&repo, 0, "a.txt", false).expect("file_diff_stash 失败");
+    assert_eq!(diff.additions, 1);
+    assert_eq!(diff.deletions, 1);
+    // 右侧应为贮藏后的内容
+    let right: Vec<&str> = diff
+        .rows
+        .iter()
+        .filter_map(|r| r.right.as_ref().map(|c| c.content.as_str()))
+        .collect();
+    assert!(right.contains(&"TWO"));
+
+    // 越界 index → NotFound
+    assert!(matches!(
+        changed_files_stash(&repo, 5),
+        Err(AppError::NotFound(_))
+    ));
+}
+
+/// v0.7 / 7.5：branches_containing 按祖先关系判定（本地 + 远程）。
+#[test]
+fn branches_containing_by_ancestry() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    let c1 = commit_file(&repo, "a.txt", "one\n", "initial");
+    let c2 = commit_file(&repo, "a.txt", "one\ntwo\n", "second");
+    // 从 c1 拉出 side 分支
+    let c1_commit = repo.find_commit(git2::Oid::from_str(&c1).unwrap()).unwrap();
+    repo.branch("side", &c1_commit, false).unwrap();
+
+    // 当前分支（HEAD）包含 c1 与 c2；side 只包含 c1。
+    let head_name = repo
+        .head()
+        .unwrap()
+        .shorthand()
+        .unwrap()
+        .to_string();
+    let containing_c2 = branches_containing(&repo, &c2).unwrap();
+    assert_eq!(containing_c2, vec![head_name]);
+    let containing_c1 = branches_containing(&repo, &c1).unwrap();
+    assert!(containing_c1.iter().any(|n| n == "side"));
+    assert_eq!(containing_c1.len(), 2);
 }

@@ -17,6 +17,7 @@ import {
   TagIcon,
   UndoIcon,
 } from "../Icons";
+import * as api from "../../api/client";
 import { useAppStore } from "../../store/app";
 import type { ChangedFile, ChangeType, CommitSignatureInfo, SignatureStatus } from "../../types";
 import { formatAbsolute } from "./CommitTable";
@@ -200,6 +201,7 @@ function SignatureBadge({ info }: { info: CommitSignatureInfo | null }) {
 
 export function CommitDetail({ onOpenRebase }: { onOpenRebase?: () => void }) {
   const selectedCommitId = useAppStore((s) => s.selectedCommitId);
+  const repo = useAppStore((s) => s.repo);
   const graphRows = useAppStore((s) => s.graphRows);
   const commitFiles = useAppStore((s) => s.commitFiles);
   const commitSignature = useAppStore((s) => s.commitSignature);
@@ -220,11 +222,31 @@ export function CommitDetail({ onOpenRebase }: { onOpenRebase?: () => void }) {
   const [copied, setCopied] = useState(false);
   const [inlineMode, setInlineMode] = useState<"branch" | "tag" | null>(null);
   const [inlineValue, setInlineValue] = useState("");
+  const [containingBranches, setContainingBranches] = useState<string[]>([]);
 
   const row = useMemo(
     () => graphRows.find((r) => r.commit.id === selectedCommitId) ?? null,
     [graphRows, selectedCommitId],
   );
+
+  // 所在分支（git branch --contains 语义，v0.7 / 7.5）。
+  useEffect(() => {
+    let cancelled = false;
+    setContainingBranches([]);
+    const repoId = useAppStore.getState().repo?.id;
+    if (!repoId || !selectedCommitId) return;
+    void api
+      .listBranchesContaining(repoId, selectedCommitId)
+      .then((names) => {
+        if (!cancelled) setContainingBranches(names);
+      })
+      .catch(() => {
+        /* 读取失败静默：分支徽标缺省不展示 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCommitId, repo?.id]);
 
   useEffect(() => {
     setCopied(false);
@@ -386,6 +408,46 @@ export function CommitDetail({ onOpenRebase }: { onOpenRebase?: () => void }) {
         <div className="cd-message-subject">{subject}</div>
         {body && <div className="cd-message-body">{body}</div>}
       </div>
+
+      {(c.parentIds.length > 0 || containingBranches.length > 0) && (
+        <div className="cd-relations">
+          {c.parentIds.length > 0 && (
+            <div className="cd-relations-row">
+              <span className="cd-relations-label">父提交</span>
+              <span className="cd-relations-items">
+                {c.parentIds.map((pid) => (
+                  <button
+                    key={pid}
+                    type="button"
+                    className="cd-parent-chip"
+                    title={`跳转到 ${pid.slice(0, 7)}`}
+                    onClick={() => void selectCommit(pid)}
+                  >
+                    {pid.slice(0, 7)}
+                  </button>
+                ))}
+              </span>
+            </div>
+          )}
+          {containingBranches.length > 0 && (
+            <div className="cd-relations-row">
+              <span className="cd-relations-label">所在分支</span>
+              <span className="cd-relations-items">
+                {containingBranches.slice(0, 12).map((name) => (
+                  <span key={name} className="cd-branch-chip" title={name}>
+                    {name}
+                  </span>
+                ))}
+                {containingBranches.length > 12 && (
+                  <span className="cd-branch-chip cd-branch-chip--more">
+                    +{containingBranches.length - 12}
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="cd-actions" role="group" aria-label="提交操作">
         <button

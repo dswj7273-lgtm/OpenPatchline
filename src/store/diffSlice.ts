@@ -25,6 +25,7 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
 
   return {
     activeView: "log",
+    diffReturnView: "log",
     diffScope: null,
     diffFiles: [],
     selectedDiffFileIndex: 0,
@@ -39,7 +40,7 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
     blameHistory: [],
     blameReturnView: "log",
 
-    openFileDiff: async (scope, files, index) => {
+    openFileDiff: async (scope, files, index, opts) => {
       const file = files[index];
       if (!file) {
         set({ error: "无效的文件索引" });
@@ -47,6 +48,8 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
       }
       set({
         activeView: "diff",
+        // 从文件历史 / Blame 打开时记录返回目标，Esc 回到来源而非日志（v0.7）。
+        diffReturnView: opts?.returnView ?? "log",
         diffScope: scope,
         diffFiles: files,
         selectedDiffFileIndex: index,
@@ -129,22 +132,35 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
     goBackToLog: () => {
       diffReqSeq++;
       conflictReqSeq++;
-      blameReqSeq++;
+      // 返回目标：从历史 / Blame 打开 Diff 时回到来源视图并保留其状态。
+      const state = get();
+      const returnTo =
+        state.diffReturnView === "history" && state.historyPath !== null
+          ? "history"
+          : state.diffReturnView === "blame" && state.blameResult !== null
+            ? "blame"
+            : "log";
       set({
-        activeView: "log",
+        activeView: returnTo,
+        diffReturnView: "log",
         diffScope: null,
         diffFiles: [],
         selectedDiffFileIndex: 0,
         currentFileDiff: null,
         diffLoading: false,
-        conflictPath: null,
-        conflictDetail: null,
-        conflictLoading: false,
-        blameResult: null,
-        blameLoading: false,
-        blameHistory: [],
-        blameReturnView: "log",
+        ...(returnTo === "log"
+          ? {
+              conflictPath: null,
+              conflictDetail: null,
+              conflictLoading: false,
+              blameResult: null,
+              blameLoading: false,
+              blameHistory: [],
+              blameReturnView: "log",
+            }
+          : {}),
       });
+      blameReqSeq++;
     },
 
     applyDiffSelection: async (action, selections) => {
@@ -319,7 +335,13 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
             : [];
       const returnView =
         opts?.returnView ??
-        (activeView === "blame" ? get().blameReturnView : activeView === "diff" ? "diff" : "log");
+        (activeView === "blame"
+          ? get().blameReturnView
+          : activeView === "diff"
+            ? "diff"
+            : activeView === "history"
+              ? "history"
+              : "log");
 
       set({
         activeView: "blame",
@@ -362,7 +384,13 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
 
     closeBlame: () => {
       blameReqSeq++;
-      const target = get().blameReturnView === "diff" && get().currentFileDiff ? "diff" : "log";
+      const st = get();
+      const target =
+        st.blameReturnView === "diff" && st.currentFileDiff
+          ? "diff"
+          : st.blameReturnView === "history" && st.historyPath
+            ? "history"
+            : "log";
       set({
         activeView: target,
         blameResult: null,

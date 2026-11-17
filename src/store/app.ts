@@ -4,6 +4,7 @@
 
 import { create } from "zustand";
 import { createDiffSlice } from "./diffSlice";
+import { createHistorySlice } from "./historySlice";
 import { createLogSlice } from "./logSlice";
 import { createRepoSlice } from "./repoSlice";
 import { createSettingsSlice } from "./settingsSlice";
@@ -21,6 +22,7 @@ export function createAppStore() {
     ...createWorkspaceSlice(...a),
     ...createSettingsSlice(...a),
     ...createUiSlice(...a),
+    ...createHistorySlice(...a),
   }));
 }
 

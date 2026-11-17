@@ -740,6 +740,41 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
       );
     },
 
+    previewStash: async (index) => {
+      const { repo } = get();
+      if (!repo) {
+        set({ error: "当前未打开仓库" });
+        return;
+      }
+      try {
+        const files = await api.getStashFiles(repo.id, index);
+        if (get().repo?.id !== repo.id) return;
+        if (files.length === 0) {
+          set({ notice: `stash@{${index}} 没有可预览的文本变更` });
+          return;
+        }
+        await get().openFileDiff({ kind: "stash", stashIndex: index }, files, 0);
+      } catch (e) {
+        set({ error: reportError("previewStash", e) });
+      }
+    },
+
+    stashBranch: async (name, index) =>
+      runExclusive("branch", "stashBranch", {}, async (repoId) => {
+        const res = await api.stashBranch(repoId, name, index);
+        if (get().repo?.id !== repoId) return false;
+        set({ repo: res.repo });
+        await get().loadFileStatus();
+        await get().loadStashes();
+        await get().reloadGraph();
+        await get().loadBranches();
+        if (get().error === null) {
+          set({ notice: `已从 stash@{${index}} 创建并切换到分支 ${name}` });
+          return true;
+        }
+        return false;
+      }),
+
     stashDrop: async (index) => {
       await runExclusive("stash", "stashDrop", {}, async (repoId) => {
         const res = await api.stashDrop(repoId, index);

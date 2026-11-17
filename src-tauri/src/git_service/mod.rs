@@ -30,16 +30,16 @@ use crate::error::{AppError, AppResult};
 use crate::types::{ChangeType, ChildRepo, RepoInfo, RepoState};
 
 pub use blame::file_blame;
-pub use branch::{checkout_branch, list_branches};
+pub use branch::{branches_containing, checkout_branch, list_branches};
 pub use commit::{
     commit_metadata, commit_signature_info, create_commit, create_commit_with_options,
 };
 pub use conflict::{get_conflict_file, resolve_conflict_file};
 pub use diff::{
-    changed_files, changed_files_range, file_diff_commit, file_diff_range, file_diff_staged,
-    file_diff_workdir,
+    changed_files, changed_files_range, changed_files_stash, file_diff_commit, file_diff_range,
+    file_diff_staged, file_diff_stash, file_diff_workdir,
 };
-pub use history::load_commit_page;
+pub use history::{file_history, load_commit_page};
 pub use patch::{apply_diff_selection, generate_file_patch};
 pub use rebase::{list_rebase_commits, rewrite_recent_commits};
 pub use status::{stage_file, status, unstage_file};

@@ -210,3 +210,34 @@ fn split_remote_branch(repo: &git2::Repository, name: &str) -> AppResult<(String
         "无法从 {name} 推导本地分支名（对应远程未配置？）"
     )))
 }
+
+/// 列出包含指定提交的分支（本地 + 远程，`git branch --contains` 语义，v0.7 / 7.5）。
+pub fn branches_containing(repo: &git2::Repository, commit_id: &str) -> AppResult<Vec<String>> {
+    let commit = super::find_commit(repo, commit_id)?;
+    let target = commit.id();
+    let mut names: Vec<String> = Vec::new();
+    for ty in [git2::BranchType::Local, git2::BranchType::Remote] {
+        let branches = repo
+            .branches(Some(ty))
+            .map_err(|e| AppError::Git(format!("枚举分支失败: {e}")))?;
+        for branch in branches {
+            let (branch, _) = branch
+                .map_err(|e| AppError::Git(format!("枚举分支失败: {e}")))?;
+            let tip = match branch.get().peel_to_commit() {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            // target 是 tip 的祖先（或同一提交）→ 该分支包含此提交。
+            let contains = tip.id() == target
+                || repo
+                    .merge_base(tip.id(), target)
+                    .is_ok_and(|base| base == target);
+            if contains
+                && let Some(name) = branch.name().ok().flatten()
+            {
+                names.push(name.to_string());
+            }
+        }
+    }
+    Ok(names)
+}

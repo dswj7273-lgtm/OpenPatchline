@@ -113,6 +113,8 @@ function GitCommandCenter({
   const stashPush = useAppStore((s) => s.stashPush);
   const stashApply = useAppStore((s) => s.stashApply);
   const stashDrop = useAppStore((s) => s.stashDrop);
+  const previewStash = useAppStore((s) => s.previewStash);
+  const stashBranch = useAppStore((s) => s.stashBranch);
   const loadStashes = useAppStore((s) => s.loadStashes);
 
   const resetHead = useAppStore((s) => s.resetHead);
@@ -122,6 +124,8 @@ function GitCommandCenter({
   const [newTagName, setNewTagName] = useState("");
   const [mergeTarget, setMergeTarget] = useState("");
   const [stashMessage, setStashMessage] = useState("");
+  const [stashBranchFor, setStashBranchFor] = useState<number | null>(null);
+  const [stashBranchName, setStashBranchName] = useState("");
   const [confirmDiscardAll, setConfirmDiscardAll] = useState(false);
   const [confirmForcePush, setConfirmForcePush] = useState(false);
 
@@ -177,6 +181,23 @@ function GitCommandCenter({
     if (busy) return;
     const ok = await stashPush(stashMessage.trim() || null);
     if (ok) setStashMessage("");
+  };
+
+  const onPreviewStash = async (index: number) => {
+    if (busy) return;
+    onClose();
+    await previewStash(index);
+  };
+
+  const onStashBranch = async (index: number) => {
+    const trimmed = stashBranchName.trim();
+    if (!trimmed || busy) return;
+    const ok = await stashBranch(trimmed, index);
+    if (ok) {
+      setStashBranchFor(null);
+      setStashBranchName("");
+      onClose();
+    }
   };
 
   const tabs: { id: CommandTab; label: string }[] = [
@@ -494,6 +515,27 @@ function GitCommandCenter({
                         type="button"
                         className="gitlog-mini-btn"
                         disabled={busy}
+                        title="预览贮藏差异（stash 提交 vs 基准提交）"
+                        onClick={() => void onPreviewStash(entry.index)}
+                      >
+                        预览
+                      </button>
+                      <button
+                        type="button"
+                        className="gitlog-mini-btn"
+                        disabled={busy}
+                        title="基于此贮藏创建并切换分支（git stash branch）"
+                        onClick={() => {
+                          setStashBranchFor(stashBranchFor === entry.index ? null : entry.index);
+                          setStashBranchName("");
+                        }}
+                      >
+                        建分支
+                      </button>
+                      <button
+                        type="button"
+                        className="gitlog-mini-btn"
+                        disabled={busy}
                         title="弹出（stash pop）"
                         onClick={() => void stashApply(entry.index, true)}
                       >
@@ -518,6 +560,38 @@ function GitCommandCenter({
                         删除
                       </button>
                     </div>
+                    {stashBranchFor === entry.index && (
+                      <div className="gitlog-stash-branch">
+                        <input
+                          type="text"
+                          className="input gitlog-cmd-input"
+                          placeholder={`分支名（如 feature/${entry.index}-stash）`}
+                          value={stashBranchName}
+                          autoFocus
+                          onChange={(e) => setStashBranchName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void onStashBranch(entry.index);
+                            if (e.key === "Escape") setStashBranchFor(null);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          disabled={busy || !stashBranchName.trim()}
+                          onClick={() => void onStashBranch(entry.index)}
+                        >
+                          创建
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={busy}
+                          onClick={() => setStashBranchFor(null)}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))
               )}
