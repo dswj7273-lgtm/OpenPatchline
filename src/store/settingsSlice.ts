@@ -25,6 +25,10 @@ function legacyThemeHint(): ThemePreference | null {
 }
 
 export const createSettingsSlice: AppSlice<SettingsSlice> = (set, get) => {
+  /** 更新请求序号：并发写时只有最新请求的响应可以回写 / 回滚，
+   *  防止先发后至的旧响应覆盖新状态（review 6.9-2）。 */
+  let updateSeq = 0;
+
   /** 应用 settings → resolved theme + CSS 变量 + 行高派生值。 */
   function applySettings(settings: AppSettings): void {
     const theme = resolveTheme(settings.theme);
@@ -62,13 +66,17 @@ export const createSettingsSlice: AppSlice<SettingsSlice> = (set, get) => {
     },
 
     updateSettings: async (patch) => {
+      const seq = ++updateSeq;
       const prev = get().settings;
       const next: AppSettings = { ...prev, ...patch };
       applySettings(next);
       try {
         const saved = await api.setAppSettings(next);
+        // 已有更新的更新在途：丢弃本次旧响应，避免覆盖最新状态。
+        if (seq !== updateSeq) return;
         applySettings(saved);
       } catch (e) {
+        if (seq !== updateSeq) return;
         applySettings(prev);
         set({ error: reportError("updateSettings", e) });
       }

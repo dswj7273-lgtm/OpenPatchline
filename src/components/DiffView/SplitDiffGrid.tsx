@@ -289,8 +289,14 @@ function useDiffViewport(
     [],
   );
 
-  // 切换文件（数据身份变化）时定位：有变更 → 直接跳到第一处变更
-  // （上方留 3 行上下文）；无变更 → 回到顶部；携带一次性恢复值则优先恢复。
+  /** 重置定位读取的最新变更下标（经 ref 读取，避免折叠展开引起数组
+   *  引用变化触发本 effect 而把滚动位置拉回第一处变更）。 */
+  const changeIndicesRef = useRef(changeIndices);
+  changeIndicesRef.current = changeIndices;
+
+  // 仅在文件/数据身份变化（resetKey）时定位：有变更 → 直接跳到第一处
+  // 变更（上方留 3 行上下文）；无变更 → 回到顶部；携带一次性恢复值则优先
+  // 恢复。折叠展开等布局变化不重置滚动位置。
   useEffect(() => {
     const el = ref.current;
     let top: number;
@@ -298,14 +304,14 @@ function useDiffViewport(
       top = restoreScroll.current;
       restoreScroll.current = null;
     } else {
-      const firstChange = changeIndices[0];
+      const firstChange = changeIndicesRef.current[0];
       top =
         firstChange !== undefined ? Math.max(0, firstChange * rowH - GOTO_PADDING_ROWS * rowH) : 0;
     }
     if (el) el.scrollTop = top;
     setVp((p) => (p.scrollTop === top ? p : { ...p, scrollTop: top }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resetKey, changeIndices]);
+  }, [resetKey]);
 
   // 跳转到上 / 下一处变更（DiffHeader 派发）。
   useEffect(() => {
@@ -842,7 +848,8 @@ export function UnifiedGrid({
     linked: true,
     maxOld: maxX,
     maxNew: maxX,
-    resetKey: lines,
+    // 折叠展开会重建 lines（引用变化），但不应重置横向滚动；跟随数据行。
+    resetKey: rows,
   });
 
   // 变更块：统一视图下修改对已拆成先删后增两行，连续聚合后自然记为 modify。

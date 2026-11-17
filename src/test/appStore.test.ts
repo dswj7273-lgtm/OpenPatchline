@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../api/client";
 import { createAppStore } from "../store/app";
 import type { ChangedFile, FetchResult, FileDiffResult, GraphPage, RepoInfo } from "../types";
+import { DEFAULT_APP_SETTINGS } from "../types";
 
 vi.mock("../api/client", () => ({
   openRepository: vi.fn(),
@@ -251,6 +252,26 @@ describe("useAppStore slices", () => {
     // 非 system 偏好下系统主题变化不影响生效主题
     store.getState().syncSystemTheme();
     expect(store.getState().theme).toBe("dark");
+  });
+
+  it("discards stale concurrent updateSettings responses (review 6.9-2)", async () => {
+    const store = createAppStore();
+    // 第一次更新响应慢且带回写值 10；第二次响应快带回写值 14。
+    mockedApi.setAppSettings
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(() => resolve({ ...DEFAULT_APP_SETTINGS, codeFontSize: 10 }), 30);
+          }),
+      )
+      .mockImplementationOnce(async (cfg) => ({ ...cfg, codeFontSize: 14 }));
+    await Promise.all([
+      store.getState().updateSettings({ codeFontSize: 11 }),
+      store.getState().updateSettings({ codeFontSize: 12 }),
+    ]);
+    // 先发后至的旧响应被序号守卫丢弃，最终生效最新请求的回写值。
+    await new Promise((r) => setTimeout(r, 50));
+    expect(store.getState().settings.codeFontSize).toBe(14);
   });
 
   it("supports range compare, swap direction, and commit history persistence", async () => {

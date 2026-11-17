@@ -370,6 +370,11 @@ export function openFileInEditor(
   return invoke<void>("open_file_in_editor", { repoId, path, line });
 }
 
+/** 弹出原生文件选择框选取 git 可执行文件；取消返回 null。 */
+export function pickGitExecutable(): Promise<string | null> {
+  return invoke<string | null>("pick_git_executable");
+}
+
 /** 生成工作区 / 暂存区单文件的 unified patch 文本。 */
 export function generateFilePatch(repoId: string, scope: DiffScope, path: string): Promise<string> {
   return invoke<string>("generate_file_patch", { repoId, scope, path });

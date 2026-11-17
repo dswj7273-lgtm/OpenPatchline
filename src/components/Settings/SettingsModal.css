@@ -111,17 +111,26 @@
 .settings-input-with-icon {
   position: relative;
   display: flex;
+  align-items: center;
   flex: 1;
   min-width: 0;
 }
 
-.settings-input-icon {
+/* 输入框右侧为浏览按钮，预留空间避免文字被遮挡 */
+.settings-input-with-icon .settings-input {
+  padding-right: 34px;
+}
+
+.settings-input-picker {
   position: absolute;
-  right: 9px;
+  right: 5px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--text-muted);
-  pointer-events: none;
+}
+
+.settings-input-picker:hover {
+  color: var(--text-primary);
 }
 
 /* 分段控件 */

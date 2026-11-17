@@ -144,7 +144,8 @@ pub fn run() {
             commands::set_app_config,
             commands::reveal_path_in_finder,
             commands::open_file_in_editor,
-            commands::generate_file_patch
+            commands::generate_file_patch,
+            commands::pick_git_executable
         ])
         // watcher 需要 AppHandle（emit 事件），在 setup 阶段注册为全局状态；
         // 同时构建原生菜单（快捷键在 macOS 菜单栏可见）并预加载应用设置。

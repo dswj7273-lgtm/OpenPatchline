@@ -6,7 +6,7 @@
  * - 文件行单击进入对应 diff（staged / workdir），当前正在审查的文件高亮提示；
  * - 底部提交卡片支持 Cmd/Ctrl + Enter 快捷提交。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import {
   BranchIcon,
@@ -224,6 +224,7 @@ function FileRow({
   onToggleStage,
   onDiscard,
   onBlame,
+  onContextMenu,
 }: {
   entry: FileStatus;
   side: "staged" | "unstaged";
@@ -235,6 +236,8 @@ function FileRow({
   onToggleStage: () => void;
   onDiscard?: () => void;
   onBlame?: () => void;
+  /** 右键菜单（由 Sidebar 根组件统一持有实例，review 修复）。 */
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const isConflict = entry.conflicted;
   const changeType = (side === "staged" ? entry.staged : entry.unstaged) ?? "modified";
@@ -252,13 +255,10 @@ function FileRow({
   const { dir, base } = splitPath(entry.path);
   const canBlame =
     !isConflict && changeType !== "untracked" && changeType !== "added" && Boolean(onBlame);
-  const fileMenu = useContextMenu();
-  const repo = useAppStore((s) => s.repo);
   return (
     <div
       className={`sidebar-file sidebar-file--${isConflict ? "conflicted" : changeType}${active ? " is-active" : ""}`}
     >
-      {fileMenu.render()}
       <button
         type="button"
         className="sidebar-file-open"
@@ -266,10 +266,7 @@ function FileRow({
         title={`${entry.path}\n${label} · ${sideLabel}`}
         aria-label={`${entry.path}，${label}，${sideLabel}`}
         onClick={onOpen}
-        onContextMenu={(e) => {
-          if (!repo) return;
-          openFileContextMenu(fileMenu.open, e, { repoId: repo.id, path: entry.path });
-        }}
+        onContextMenu={onContextMenu}
       >
         <span
           className={`sidebar-file-status badge-${isConflict ? "conflicted" : changeType}`}
@@ -338,6 +335,7 @@ function TreeView({
   onStageFile,
   onDiscardFile,
   onBlameFile,
+  onFileContextMenu,
 }: {
   node: DirNode;
   depth: number;
@@ -351,6 +349,7 @@ function TreeView({
   onStageFile: (path: string) => void;
   onDiscardFile?: (path: string) => void;
   onBlameFile?: (path: string) => void;
+  onFileContextMenu?: (e: React.MouseEvent, path: string) => void;
 }) {
   const pad = { paddingLeft: `${8 + depth * 14}px` };
   return (
@@ -400,6 +399,7 @@ function TreeView({
               onStageFile={onStageFile}
               onDiscardFile={onDiscardFile}
               onBlameFile={onBlameFile}
+              onFileContextMenu={onFileContextMenu}
             />
           )}
         </div>
@@ -417,6 +417,7 @@ function TreeView({
           onToggleStage={() => onStageFile(f.path)}
           onDiscard={onDiscardFile ? () => onDiscardFile(f.path) : undefined}
           onBlame={onBlameFile ? () => onBlameFile(f.path) : undefined}
+          onContextMenu={onFileContextMenu ? (e) => onFileContextMenu(e, f.path) : undefined}
         />
       ))}
     </>
@@ -847,6 +848,17 @@ export function Sidebar() {
   const [resizing, setResizing] = useState(false);
   const dragStartRef = useRef<{ x: number; w: number } | null>(null);
 
+  // 全侧栏共享一个右键菜单实例（避免每个 FileRow 各持 hook 状态，review 修复）。
+  const fileMenu = useContextMenu();
+  const handleFileContextMenu = useCallback(
+    (e: React.MouseEvent, path: string) => {
+      const repoId = useAppStore.getState().repo?.id;
+      if (!repoId) return;
+      openFileContextMenu(fileMenu.open, e, { repoId, path });
+    },
+    [fileMenu],
+  );
+
   const [conflictsOpen, setConflictsOpen] = useState(true);
   const [stagedOpen, setStagedOpen] = useState(true);
   const [changesOpen, setChangesOpen] = useState(true);
@@ -1016,6 +1028,7 @@ export function Sidebar() {
                 onOpenFile={(f) => void openConflictFile(f.path)}
                 onStageDir={(_, paths) => void stageFiles(paths)}
                 onStageFile={(p) => void stageFile(p)}
+                onFileContextMenu={handleFileContextMenu}
               />
             </FileGroup>
           )}
@@ -1042,6 +1055,7 @@ export function Sidebar() {
                 onStageDir={(_, paths) => void unstageFiles(paths)}
                 onStageFile={(p) => void unstageFile(p)}
                 onBlameFile={(p) => void openFileBlame(p, null, { returnView: "log" })}
+                onFileContextMenu={handleFileContextMenu}
               />
             ) : (
               <p className="sidebar-group-empty">暂无已暂存更改</p>
@@ -1071,6 +1085,7 @@ export function Sidebar() {
                 onStageFile={(p) => void stageFile(p)}
                 onDiscardFile={(p) => setConfirmDiscard({ path: p, untracked: false })}
                 onBlameFile={(p) => void openFileBlame(p, null, { returnView: "log" })}
+                onFileContextMenu={handleFileContextMenu}
               />
             ) : (
               <p className="sidebar-group-empty">工作区无未暂存修改</p>
@@ -1099,6 +1114,7 @@ export function Sidebar() {
                 onStageDir={(_, paths) => void stageFiles(paths)}
                 onStageFile={(p) => void stageFile(p)}
                 onDiscardFile={(p) => setConfirmDiscard({ path: p, untracked: true })}
+                onFileContextMenu={handleFileContextMenu}
               />
             ) : (
               <p className="sidebar-group-empty">没有未跟踪文件</p>
@@ -1120,6 +1136,7 @@ export function Sidebar() {
         onPointerCancel={onResizeEnd}
         onDoubleClick={() => setWidth(SIDEBAR_DEFAULT_W)}
       />
+      {fileMenu.render()}
     </aside>
   );
 }

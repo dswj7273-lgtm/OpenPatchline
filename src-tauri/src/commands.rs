@@ -1199,3 +1199,19 @@ pub async fn generate_file_patch(
     .await
     .map_err(join_error)?
 }
+
+/// 弹出原生文件选择框选取 git 可执行文件（设置页 Git 路径旁的浏览按钮）；
+/// 用户取消返回 None。
+#[tauri::command]
+pub async fn pick_git_executable(app: tauri::AppHandle) -> AppResult<Option<String>> {
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<Option<String>> {
+        Ok(app
+            .dialog()
+            .file()
+            .blocking_pick_file()
+            .and_then(|p| p.into_path().ok())
+            .map(|p| p.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(join_error)?
+}

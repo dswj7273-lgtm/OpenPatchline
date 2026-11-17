@@ -5,10 +5,12 @@
  * 后端规整后的值会回写 store，保证展示值始终为最终生效值。
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { KEYBINDINGS, formatKeybinding, type KeybindingSpec } from "../../keyboard/keymap";
 import { useAppStore } from "../../store/app";
 import type { ThemePreference } from "../../types";
+import { reportError } from "../../utils/errors";
+import * as api from "../../api/client";
 import { CloseIcon, FolderIcon, SettingsIcon } from "../Icons";
 import "./SettingsModal.css";
 
@@ -60,6 +62,62 @@ function Segmented<T extends string>({
         </button>
       ))}
     </div>
+  );
+}
+
+/**
+ * 草稿态文本输入（review 修复）：输入期间维护本地 draft，
+ * 失焦 / 回车时才提交 updateSettings —— 避免每次按键触发后端
+ * 往返把尾部空格 trim 掉（`code --goto {path}:{line}` 无法输入）
+ * 以及并发写竞态。值变化且未聚焦时同步外部值。
+ */
+function SettingsTextInput({
+  value,
+  onCommit,
+  placeholder,
+  spellCheck = false,
+  list,
+  ariaLabel,
+}: {
+  /** 当前生效值（null 展示为空串）。 */
+  value: string | null;
+  /** 提交草稿；返回 Promise 供按钮等调用方复用。 */
+  onCommit: (draft: string) => void;
+  placeholder?: string;
+  spellCheck?: boolean;
+  list?: string;
+  ariaLabel?: string;
+}) {
+  const [draft, setDraft] = useState(value ?? "");
+  const [focused, setFocused] = useState(false);
+  const valueStr = value ?? "";
+  useEffect(() => {
+    if (!focused) setDraft(valueStr);
+  }, [valueStr, focused]);
+
+  const commit = () => {
+    if (draft !== valueStr) onCommit(draft);
+  };
+
+  return (
+    <input
+      type="text"
+      className="input settings-input"
+      aria-label={ariaLabel}
+      placeholder={placeholder}
+      spellCheck={spellCheck}
+      list={list}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onFocus={() => setFocused(true)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
 
@@ -144,13 +202,12 @@ export function SettingsModal() {
           <section className="settings-section" aria-label="编辑器">
             <h3 className="settings-section__title">编辑器</h3>
             <Field label="代码字体" hint="留空使用内置等宽字体栈；需字体已安装">
-              <input
-                type="text"
-                className="input settings-input"
+              <SettingsTextInput
+                ariaLabel="代码字体"
                 list="settings-font-suggestions"
                 placeholder="JetBrains Mono"
                 value={settings.codeFontFamily}
-                onChange={(e) => void updateSettings({ codeFontFamily: e.target.value })}
+                onCommit={(codeFontFamily) => void updateSettings({ codeFontFamily })}
               />
               <datalist id="settings-font-suggestions">
                 {FONT_SUGGESTIONS.map((f) => (
@@ -234,36 +291,52 @@ export function SettingsModal() {
             <h3 className="settings-section__title">外部工具</h3>
             <Field
               label="外部编辑器命令"
-              hint="支持 {path} 与 {line} 占位符，如：code --goto {path}:{line}；留空禁用"
+              hint="支持 {path} 与 {line} 占位符，如：code --goto {path}:{line}；留空禁用；失焦或回车后保存"
             >
-              <input
-                type="text"
-                className="input settings-input"
+              <SettingsTextInput
+                ariaLabel="外部编辑器命令"
                 placeholder="code --goto {path}:{line}"
-                spellCheck={false}
-                value={settings.externalEditorCommand ?? ""}
-                onChange={(e) =>
+                value={settings.externalEditorCommand}
+                onCommit={(draft) =>
                   void updateSettings({
-                    externalEditorCommand: e.target.value.trim() ? e.target.value : null,
+                    externalEditorCommand: draft.trim() ? draft : null,
                   })
                 }
               />
             </Field>
-            <Field label="Git 可执行文件" hint="留空自动探测（PATH → Homebrew 常见位置）">
+            <Field
+              label="Git 可执行文件"
+              hint="留空自动探测（PATH → Homebrew 常见位置）；失焦或回车后保存"
+            >
               <span className="settings-input-with-icon">
-                <input
-                  type="text"
-                  className="input settings-input"
+                <SettingsTextInput
+                  ariaLabel="Git 可执行文件路径"
                   placeholder="/opt/homebrew/bin/git"
-                  spellCheck={false}
-                  value={settings.gitExecutablePath ?? ""}
-                  onChange={(e) =>
+                  value={settings.gitExecutablePath}
+                  onCommit={(draft) =>
                     void updateSettings({
-                      gitExecutablePath: e.target.value.trim() ? e.target.value : null,
+                      gitExecutablePath: draft.trim() ? draft : null,
                     })
                   }
                 />
-                <FolderIcon className="settings-input-icon" />
+                <button
+                  type="button"
+                  className="icon-btn settings-input-picker"
+                  aria-label="浏览选择 Git 可执行文件"
+                  title="浏览选择 Git 可执行文件"
+                  onClick={() => {
+                    void api
+                      .pickGitExecutable()
+                      .then((picked) => {
+                        if (picked) void updateSettings({ gitExecutablePath: picked });
+                      })
+                      .catch((e) =>
+                        useAppStore.setState({ error: reportError("pickGitExecutable", e) }),
+                      );
+                  }}
+                >
+                  <FolderIcon />
+                </button>
               </span>
             </Field>
           </section>
