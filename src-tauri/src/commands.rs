@@ -1293,3 +1293,21 @@ pub async fn stash_branch(
     .await
     .map_err(join_error)?
 }
+
+/// 交互式变基（v0.7 / 7.3）：Pick/Reword/Squash/Fixup/Drop + 任意顺序；
+/// 执行前创建备份引用 refs/opl-backup/rebase，冲突时复用既有继续/中止链路。
+#[tauri::command]
+pub async fn interactive_rebase(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    plan: Vec<RebasePlanEntry>,
+) -> AppResult<GitActionResult> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<GitActionResult> {
+        let mut entry = lock_entry(&entry);
+        let workdir = workdir_of(&entry.repo)?;
+        git_remote::interactive_rebase(&mut entry.repo, &workdir, &plan)
+    })
+    .await
+    .map_err(join_error)?
+}

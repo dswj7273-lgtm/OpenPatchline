@@ -157,12 +157,16 @@ export function listRebaseCommits(repoId: string, limit = 20): Promise<RebaseCom
   return invoke<RebaseCommitEntry[]>("list_rebase_commits", { repoId, limit });
 }
 
-/** 执行轻量交互式变基（Pick / Reword / Squash / Fixup）。 */
-export function rewriteRecentCommits(
+/**
+ * 执行交互式变基（Pick / Reword / Squash / Fixup / Drop + 任意顺序）。
+ * 无重排且无丢弃时后端自动走无冲突轻量路径；含重排/丢弃时委托
+ * `git rebase -i`，执行前创建备份引用 refs/opl-backup/rebase。
+ */
+export function interactiveRebase(
   repoId: string,
   plan: RebasePlanEntry[],
 ): Promise<GitActionResult> {
-  return invoke<GitActionResult>("rewrite_recent_commits", { repoId, plan });
+  return invoke<GitActionResult>("interactive_rebase", { repoId, plan });
 }
 
 /** 列出本地与远程分支（含当前标记、上游与 ahead/behind）。 */

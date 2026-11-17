@@ -803,9 +803,9 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
       }
     },
 
-    rewriteRecentCommits: async (plan) =>
-      runExclusive("rebase", "rewriteRecentCommits", {}, async (repoId) => {
-        const res = await api.rewriteRecentCommits(repoId, plan);
+    interactiveRebase: async (plan) =>
+      runExclusive("rebase", "interactiveRebase", {}, async (repoId) => {
+        const res = await api.interactiveRebase(repoId, plan);
         if (get().repo?.id !== repoId) return false;
         set({
           repo: res.repo,
@@ -818,7 +818,10 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
         await get().reloadGraph();
         await get().loadBranches();
         if (get().error === null) {
-          set({ notice: `已整理 ${plan.length} 条提交历史` });
+          const summary = lastOutputLine(res.output);
+          set({
+            notice: `已整理 ${plan.length} 条提交历史${summary ? `：${summary}` : ""}（原历史备份于 refs/opl-backup/rebase）`,
+          });
           return true;
         }
         return false;

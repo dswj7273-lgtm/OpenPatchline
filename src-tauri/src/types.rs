@@ -515,6 +515,8 @@ pub enum RebaseAction {
     Reword,
     Squash,
     Fixup,
+    /// 丢弃该提交（v0.7 / 7.3，经 `git rebase -i` 执行）。
+    Drop,
 }
 
 /// 可参与轻量交互式 rebase 的最近线性提交条目（按时间从旧到新返回）。

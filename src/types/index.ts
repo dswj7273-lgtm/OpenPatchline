@@ -240,7 +240,7 @@ export interface CommitSignatureInfo {
 }
 
 /** 轻量交互式变基的单条动作。 */
-export type RebaseAction = "pick" | "reword" | "squash" | "fixup";
+export type RebaseAction = "pick" | "reword" | "squash" | "fixup" | "drop";
 
 /** 可参与轻量交互式 rebase 的最近线性提交条目（从旧到新）。 */
 export interface RebaseCommitEntry {

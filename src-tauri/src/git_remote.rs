@@ -189,12 +189,24 @@ fn spawn_git_command_with_stdin(
     args: &[&str],
     pipe_stdin: bool,
 ) -> AppResult<Child> {
+    spawn_git_command_with_envs(workdir, args, pipe_stdin, &[])
+}
+
+/// [`spawn_git_command_with_stdin`] 的扩展版本：追加覆盖型环境变量
+/// （如交互式变基的 GIT_SEQUENCE_EDITOR / GIT_EDITOR，v0.7 / 7.3）。
+fn spawn_git_command_with_envs(
+    workdir: &Path,
+    args: &[&str],
+    pipe_stdin: bool,
+    extra_envs: &[(&str, &str)],
+) -> AppResult<Child> {
     if let Some(bin) = git_bin_override() {
         let mut cmd = Command::new(&bin);
         cmd.current_dir(workdir)
             .args(args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_EDITOR", "true")
+            .envs(extra_envs.iter().map(|(k, v)| (*k, *v)))
             .stdin(if pipe_stdin {
                 Stdio::piped()
             } else {
@@ -220,6 +232,7 @@ fn spawn_git_command_with_stdin(
             .args(args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_EDITOR", "true")
+            .envs(extra_envs.iter().map(|(k, v)| (*k, *v)))
             .stdin(if pipe_stdin {
                 Stdio::piped()
             } else {
@@ -453,6 +466,21 @@ fn run_git_streaming(
 ) -> AppResult<String> {
     let (stdout, stderr) = run_git_raw_with(workdir, args, progress)?;
     Ok(normalize_output(&stdout, &stderr))
+}
+
+/// 运行 git 并返回 (是否成功, 规整输出)；非零退出不转为 Err（继续操作多轮冲突时
+/// 退出码非零但操作仍在进行，需要据仓库状态而非退出码判断进度）。
+fn run_git_tolerant(workdir: &Path, args: &[&str]) -> AppResult<(bool, String)> {
+    let child = spawn_git_command_with_envs(workdir, args, false, &[])?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| AppError::Io(format!("等待 git 子进程失败: {e}")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    Ok((
+        output.status.success(),
+        normalize_output(&stdout, &stderr),
+    ))
 }
 
 /// 当仓库/全局未配置 git 签名时，附加 `-c user.name=... -c user.email=...` 运行提交类命令。
@@ -815,7 +843,8 @@ pub fn continue_operation(repo: &git2::Repository, workdir: &Path) -> AppResult<
             "仍有未解决的冲突文件，请先解决冲突并标记为已解决".to_string(),
         ));
     }
-    let args: &[&str] = match git_service::repo_state(repo) {
+    let state = git_service::repo_state(repo);
+    let args: &[&str] = match state {
         RepoState::Merging => &["merge", "--continue"],
         RepoState::Rebasing => &["rebase", "--continue"],
         RepoState::CherryPicking => &["cherry-pick", "--continue"],
@@ -825,8 +854,20 @@ pub fn continue_operation(repo: &git2::Repository, workdir: &Path) -> AppResult<
             return Err(AppError::InvalidArg("当前仓库没有可继续的操作".to_string()));
         }
     };
-    let output = run_git_with_signature(repo, workdir, args)?;
-    action_result(repo, output)
+    let (ok, output) = run_git_tolerant(workdir, args)?;
+    if ok {
+        return action_result(repo, output);
+    }
+    // 退出码非零但操作仍进行中（如 rebase 后续步骤再次冲突）→ 返回进度，
+    // 由前端继续驱动「解决 → 继续」循环（v0.7 / 7.3 多轮冲突场景）。
+    if git_service::repo_state(repo) == state {
+        return action_result(repo, format!("{output}\n（仍有待处理步骤，请继续解决冲突后再次「继续」）"));
+    }
+    Err(AppError::Git(format!(
+        "git {} 失败:\n{}",
+        args.join(" "),
+        output.trim()
+    )))
 }
 
 /// 新建本地分支（可选基于 `start_point` 并立即切换）。
@@ -1073,9 +1114,297 @@ pub fn stash_drop(
 // 测试：以本地裸仓库充当远程，真实走 git CLI 子进程覆盖网络路径
 // ---------------------------------------------------------------------------
 
+/// 基于贮藏条目创建并切换分支（`git stash branch <name> stash@{n}`，v0.7 / 7.4）：
+/// 在贮藏时的基准提交上建分支、检出并应用贮藏，成功后自动弹出该条目。
+pub fn stash_branch(
+    repo: &git2::Repository,
+    workdir: &Path,
+    name: &str,
+    index: usize,
+) -> AppResult<GitActionResult> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().any(char::is_whitespace) {
+        return Err(AppError::InvalidArg(
+            "分支名不能包含空白字符".to_string(),
+        ));
+    }
+    let stash_ref = format!("stash@{{{index}}}");
+    let output = run_git(workdir, &["stash", "branch", name, &stash_ref])?;
+    action_result(repo, output)
+}
+
+// ---------------------------------------------------------------------------
+// 交互式变基（v0.7 / 7.3）
+// ---------------------------------------------------------------------------
+
+/// 变基前备份引用：始终指向最近一次交互式变基开始前的分支头。
+pub const REBASE_BACKUP_REF: &str = "refs/opl-backup/rebase";
+
+/// 允许一次性整理的最大提交数量（与轻量路径保持一致）。
+const MAX_INTERACTIVE_REBASE: usize = 50;
+
+/// 交互式变基（v0.7 / 7.3）：Pick / Reword / Squash / Fixup / Drop + 任意顺序。
+///
+/// - 无重排且无丢弃时走 [`git_service::rewrite_recent_commits`] 的无冲突
+///   轻量路径（数学上不会冲突）；
+/// - 含重排或丢弃时委托 `git rebase -i` + `GIT_SEQUENCE_EDITOR`（todo 由
+///   本函数生成，git 自身不再弹出编辑器；Reword/Squash 的说明经
+///   `GIT_EDITOR` 脚本按调用次序写入）；
+/// - 两种路径执行前都会把当前分支头记录到 [`REBASE_BACKUP_REF`]；
+/// - 变基中途冲突：仓库进入 Rebasing 状态并返回 Ok（前端走既有的
+///   冲突编辑器 + 继续 / 中止链路，Continue/Abort 均不丢失提交）。
+pub fn interactive_rebase(
+    repo: &mut git2::Repository,
+    workdir: &Path,
+    plan: &[crate::types::RebasePlanEntry],
+) -> AppResult<GitActionResult> {
+    if plan.is_empty() {
+        return Err(AppError::InvalidArg("提交整理计划不能为空".to_string()));
+    }
+    if plan.len() > MAX_INTERACTIVE_REBASE {
+        return Err(AppError::InvalidArg(format!(
+            "单次最多整理 {MAX_INTERACTIVE_REBASE} 个最近提交"
+        )));
+    }
+
+    // 读取自 HEAD 起连续 plan.len() 个线性提交（原顺序，旧 → 新）。
+    let (head_oid, head_first_parent_walk) = {
+        let head_commit = repo
+            .head()
+            .map_err(|e| AppError::NotFound(format!("HEAD 不可用，无法整理提交: {e}")))?
+            .peel_to_commit()
+            .map_err(|e| AppError::Git(format!("解析 HEAD 提交失败: {e}")))?;
+        (head_commit.id(), head_commit)
+    };
+    let mut chain: Vec<git2::Oid> = Vec::with_capacity(plan.len());
+    let mut cur = head_first_parent_walk;
+    for step in 0..plan.len() {
+        if cur.parent_count() > 1 {
+            return Err(AppError::InvalidArg(
+                "选定范围包含合并提交（merge commit），不支持交互式整理".to_string(),
+            ));
+        }
+        chain.push(cur.id());
+        if step + 1 < plan.len() {
+            if cur.parent_count() == 0 {
+                return Err(AppError::InvalidArg(
+                    "提交数量超过仓库根提交，历史长度不匹配，请刷新后重试".to_string(),
+                ));
+            }
+            cur = cur
+                .parent(0)
+                .map_err(|e| AppError::Git(format!("读取父提交失败: {e}")))?;
+        }
+    }
+    chain.reverse(); // 旧 → 新
+
+    // 计划必须恰好覆盖该段历史（集合一致），显式丢弃须用 Drop 表达。
+    let mut plan_sorted: Vec<&str> = plan.iter().map(|e| e.commit_id.as_str()).collect();
+    let mut chain_sorted: Vec<String> = chain.iter().map(|o| o.to_string()).collect();
+    plan_sorted.sort();
+    chain_sorted.sort();
+    if plan_sorted != chain_sorted {
+        return Err(AppError::InvalidArg(
+            "整理计划与当前 HEAD 最近提交不一致，请刷新后重试".to_string(),
+        ));
+    }
+
+    if matches!(plan[0].action, crate::types::RebaseAction::Squash)
+        || matches!(plan[0].action, crate::types::RebaseAction::Fixup)
+    {
+        return Err(AppError::InvalidArg(
+            "新顺序中的第一条提交不能设为压缩（Squash/Fixup）".to_string(),
+        ));
+    }
+
+    // 备份引用：两种路径统一先落盘（不丢失提交的保险，验收项）。
+    drop(cur);
+    repo.reference(
+        REBASE_BACKUP_REF,
+        head_oid,
+        true,
+        "openpatchline: backup before interactive rebase",
+    )
+    .map_err(|e| AppError::Git(format!("创建备份引用失败: {e}")))?;
+
+    // 无重排且无 Drop → 轻量无冲突路径。
+    let order_preserved = plan
+        .iter()
+        .zip(chain.iter())
+        .all(|(e, oid)| e.commit_id == oid.to_string());
+    let has_drop = plan
+        .iter()
+        .any(|e| matches!(e.action, crate::types::RebaseAction::Drop));
+    if order_preserved && !has_drop {
+        let new_head = git_service::rewrite_recent_commits(repo, plan)?;
+        let output = format!(
+            "已按无冲突轻量路径整理 {n} 条提交；原 HEAD 备份于 {REBASE_BACKUP_REF}（{old}）",
+            n = plan.len(),
+            old = &head_oid.to_string()[..7],
+        );
+        let _ = new_head;
+        return action_result(repo, output);
+    }
+
+    // —— 构造 todo 与编辑器脚本 ——
+    let dir = tempfile::tempdir()
+        .map_err(|e| AppError::Io(format!("创建变基临时目录失败: {e}")))?;
+    let mut todo_lines: Vec<String> = Vec::new();
+    // 编辑器消息队列：Reword / Squash 依序消耗。
+    let mut editor_messages: Vec<String> = Vec::new();
+    // 当前合并分组的说明（Squash 默认合并文案用）。
+    let mut group_message = String::new();
+
+    for entry in plan {
+        let oid = git2::Oid::from_str(&entry.commit_id)
+            .map_err(|e| AppError::InvalidArg(format!("提交 id 非法: {e}")))?;
+        let commit = repo
+            .find_commit(oid)
+            .map_err(|e| AppError::Git(format!("读取提交 {oid} 失败: {e}")))?;
+        let raw_msg = commit.message().unwrap_or_default().trim_end_matches('\n');
+        let _subject = raw_msg.lines().next().unwrap_or_default();
+        let custom = entry
+            .message
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+
+        use crate::types::RebaseAction;
+        match entry.action {
+            RebaseAction::Pick => {
+                todo_lines.push(format!("pick {oid}"));
+                group_message = raw_msg.to_string();
+            }
+            RebaseAction::Reword => {
+                let msg = custom.ok_or_else(|| {
+                    AppError::InvalidArg("改写说明（Reword）的提交信息不能为空".to_string())
+                })?;
+                todo_lines.push(format!("reword {oid}"));
+                editor_messages.push(msg.to_string());
+                group_message = msg.to_string();
+            }
+            RebaseAction::Squash => {
+                // 无自定义文案时沿用既有轻量路径语义：合并两侧说明。
+                let combined = match custom {
+                    Some(m) => m.to_string(),
+                    None => {
+                        let mut c = group_message.clone();
+                        if !c.is_empty() {
+                            c.push_str("\n\n");
+                        }
+                        c.push_str(raw_msg);
+                        c
+                    }
+                };
+                todo_lines.push(format!("squash {oid}"));
+                editor_messages.push(combined.clone());
+                group_message = combined;
+            }
+            RebaseAction::Fixup => {
+                todo_lines.push(format!("fixup {oid}"));
+                // 分组说明保持不变。
+            }
+            RebaseAction::Drop => {
+                todo_lines.push(format!("drop {oid}"));
+            }
+        }
+    }
+
+    let todo_path = dir.path().join("todo");
+    std::fs::write(&todo_path, format!("{}\n", todo_lines.join("\n")))
+        .map_err(|e| AppError::Io(format!("写入变基 todo 失败: {e}")))?;
+
+    // GIT_EDITOR 脚本：第 N 次被调用时写入 msg-N.txt（fixup/drop 不触发编辑器）。
+    let editor_path = dir.path().join("editor.sh");
+    let script = format!(
+        "#!/bin/sh\nd=\"{d}\"\nn=$(cat \"$d/.n\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/.n\"\nif [ -f \"$d/msg-$n.txt\" ]; then cp \"$d/msg-$n.txt\" \"$1\"; fi\nexit 0\n",
+        d = dir.path().display()
+    );
+    std::fs::write(&editor_path, script)
+        .map_err(|e| AppError::Io(format!("写入变基编辑器脚本失败: {e}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&editor_path)
+            .map_err(|e| AppError::Io(format!("读取编辑器脚本元数据失败: {e}")))?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&editor_path, perms)
+            .map_err(|e| AppError::Io(format!("设置编辑器脚本权限失败: {e}")))?;
+    }
+    for (idx, msg) in editor_messages.iter().enumerate() {
+        std::fs::write(dir.path().join(format!("msg-{}.txt", idx + 1)), format!("{msg}\n"))
+            .map_err(|e| AppError::Io(format!("写入变基说明文件失败: {e}")))?;
+    }
+
+    // 基准：段内最旧提交的父提交；无父（根提交参与）→ --root。
+    let oldest = chain[0];
+    let oldest_commit = repo
+        .find_commit(oldest)
+        .map_err(|e| AppError::Git(format!("读取段内最旧提交失败: {e}")))?;
+    let mut args: Vec<&str> = vec!["rebase", "-i", "--empty=keep"];
+    let base_str;
+    if oldest_commit.parent_count() == 0 {
+        args.push("--root");
+    } else {
+        let base = oldest_commit
+            .parent_id(0)
+            .map_err(|e| AppError::Git(format!("读取基准父提交失败: {e}")))?;
+        base_str = base.to_string();
+        args.push(base_str.as_str());
+    }
+
+    let seq_editor = format!("cp '{}'", todo_path.display());
+    let editor_str = editor_path.display().to_string();
+    let envs: Vec<(&str, &str)> = vec![
+        ("GIT_SEQUENCE_EDITOR", seq_editor.as_str()),
+        ("GIT_EDITOR", editor_str.as_str()),
+    ];
+
+    let child = spawn_git_command_with_envs(workdir, &args, false, &envs)?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| AppError::Io(format!("等待 git 子进程失败: {e}")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    if output.status.success() {
+        let summary = normalize_output(&stdout, &stderr);
+        return action_result(
+            repo,
+            format!(
+                "{summary}\n原 HEAD {old} 已备份于 {REBASE_BACKUP_REF}",
+                old = &head_oid.to_string()[..7],
+            ),
+        );
+    }
+
+    // 冲突暂停：仓库处于变基中 → 返回 Ok，前端复用冲突编辑器与继续 / 中止。
+    if git_service::repo_state(repo) == crate::types::RepoState::Rebasing {
+        return action_result(
+            repo,
+            format!(
+                "变基暂停：存在未解决的冲突，请在冲突编辑器中解决并暂存后点击「继续」完成变基（或「中止」恢复；原历史备份于 {REBASE_BACKUP_REF}）\n{}",
+                normalize_output(&stdout, &stderr)
+            ),
+        );
+    }
+
+    let detail = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    Err(AppError::Git(format!(
+        "git {} 失败:\n{detail}",
+        args.join(" ")
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{RebaseAction, RebasePlanEntry};
     use std::path::PathBuf;
 
     /// 固定测试签名。
@@ -1749,23 +2078,171 @@ fn stash_branch_creates_checks_out_and_pops() {
     // 非法分支名被拒绝
     assert!(stash_branch(&fx.work, &dir, "bad name", 0).is_err());
 }
-}
+    #[test]
+    fn interactive_rebase_reorders_and_drops_with_backup() {
+        let mut fx = setup_with_bare_remote();
+            let dir = fx.workdir();
+            // 三条线性提交：c1 → c2 → c3
+            commit_file(&fx.work, "a.txt", "one\n", "feat: one");
+            commit_file(&fx.work, "b.txt", "two\n", "feat: two");
+            let c3 = commit_file(&fx.work, "c.txt", "three\n", "feat: three");
+            // 收集 c1/c2 的 id（HEAD~1 / HEAD~2）
+            let (c1, c2) = {
+                let head = fx.work.head().unwrap().peel_to_commit().unwrap();
+                (
+                    head.parent(0).unwrap().parent(0).unwrap().id().to_string(),
+                    head.parent(0).unwrap().id().to_string(),
+                )
+            };
 
-/// 基于贮藏条目创建并切换分支（`git stash branch <name> stash@{n}`，v0.7 / 7.4）：
-/// 在贮藏时的基准提交上建分支、检出并应用贮藏，成功后自动弹出该条目。
-pub fn stash_branch(
-    repo: &git2::Repository,
-    workdir: &Path,
-    name: &str,
-    index: usize,
-) -> AppResult<GitActionResult> {
-    let name = name.trim();
-    if name.is_empty() || name.chars().any(char::is_whitespace) {
-        return Err(AppError::InvalidArg(
-            "分支名不能包含空白字符".to_string(),
-        ));
+        // 计划：drop c2，重排为 c3 在前、c1 在后
+        let plan = vec![
+            RebasePlanEntry { commit_id: c3.clone(), action: RebaseAction::Pick, message: None },
+            RebasePlanEntry { commit_id: c2, action: RebaseAction::Drop, message: None },
+            RebasePlanEntry { commit_id: c1, action: RebaseAction::Pick, message: None },
+        ];
+        let res = interactive_rebase(&mut fx.work, &dir, &plan).expect("interactive_rebase 失败");
+        assert_eq!(res.repo.state, RepoState::Clean);
+
+        // 新历史：one → three（c2 被丢弃，c3 被重排到 c1 之后）
+        let new_head = fx.work.head().unwrap().peel_to_commit().unwrap();
+        let subjects: Vec<String> = {
+            let mut v = vec![new_head.message().unwrap().trim().to_string()];
+            let mut cur = new_head.clone();
+            while cur.parent_count() == 1 {
+                cur = cur.parent(0).unwrap();
+                v.push(cur.message().unwrap().trim().to_string());
+            }
+            v.reverse();
+            v
+        };
+        // fixture 的 initial 提交之后：按新顺序 three → one（two 被丢弃）
+    assert_eq!(subjects, vec!["initial", "feat: three", "feat: one"]);
+        // 备份引用指向原 HEAD
+        let backup = fx.work.find_reference(REBASE_BACKUP_REF).unwrap();
+        assert_eq!(backup.target().unwrap().to_string(), c3);
+        // 工作区内容：a.txt 与 c.txt 存在，b.txt 因 drop 且重排后基于 c1 → 不存在
+        assert!(dir.join("a.txt").exists());
+        assert!(dir.join("c.txt").exists());
+        assert!(!dir.join("b.txt").exists());
     }
-    let stash_ref = format!("stash@{{{index}}}");
-    let output = run_git(workdir, &["stash", "branch", name, &stash_ref])?;
-    action_result(repo, output)
+
+    #[test]
+    fn interactive_rebase_reword_and_squash_custom_messages() {
+        let mut fx = setup_with_bare_remote();
+            let dir = fx.workdir();
+            commit_file(&fx.work, "a.txt", "one\n", "feat: base");
+            commit_file(&fx.work, "a.txt", "one\ntwo\n", "wip: two");
+            let (c1, c2) = {
+                let head = fx.work.head().unwrap().peel_to_commit().unwrap();
+                (
+                    head.parent(0).unwrap().id().to_string(),
+                    head.id().to_string(),
+                )
+            };
+
+        // reword 第一条 + squash 第二条（自定义合并文案）
+        let plan = vec![
+            RebasePlanEntry {
+                commit_id: c1,
+                action: RebaseAction::Reword,
+                message: Some("feat: base (reworded)".to_string()),
+            },
+            RebasePlanEntry {
+                commit_id: c2,
+                action: RebaseAction::Squash,
+                message: Some("squashed: two changes".to_string()),
+            },
+        ];
+        let res = interactive_rebase(&mut fx.work, &dir, &plan).expect("interactive_rebase 失败");
+        assert_eq!(res.repo.state, RepoState::Clean);
+        let new_head = fx.work.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(new_head.parent_count(), 1); // squash 后仍单条新提交（含父）
+        assert_eq!(
+            new_head.message().unwrap().trim(),
+            "squashed: two changes"
+        );
+        // 内容为两边叠加
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\ntwo\n"
+        );
+    }
+
+    #[test]
+    fn interactive_rebase_conflict_continue_and_abort_keep_backup() {
+        let mut fx = setup_with_bare_remote();
+            let dir = fx.workdir();
+            // 两条提交都修改同一行 → 任意重排都会冲突
+            commit_file(&fx.work, "a.txt", "line v1\n", "change one");
+            commit_file(&fx.work, "a.txt", "line v2\n", "change two");
+            let (c1, c2, original_head) = {
+                let head = fx.work.head().unwrap().peel_to_commit().unwrap();
+                (
+                    head.parent(0).unwrap().id().to_string(),
+                    head.id().to_string(),
+                    head.id().to_string(),
+                )
+            };
+
+        // 重排（two 在前，one 在后）→ 第二条 pick 必然冲突
+        let plan = vec![
+            RebasePlanEntry { commit_id: c2, action: RebaseAction::Pick, message: None },
+            RebasePlanEntry { commit_id: c1, action: RebaseAction::Pick, message: None },
+        ];
+        let res = interactive_rebase(&mut fx.work, &dir, &plan).expect("冲突应返回 Ok 而非 Err");
+        assert_eq!(res.repo.state, RepoState::Rebasing);
+
+        // —— 走通 Continue：重排两条互改同一行的提交会连续产生冲突，
+        // 循环「解决 → 暂存 → rebase --continue」直至变基完成 ——
+        let mut rounds = 0;
+        loop {
+            if crate::git_service::repo_state(&fx.work) == RepoState::Clean {
+                break;
+            }
+            std::fs::write(dir.join("a.txt"), "line merged\n").unwrap();
+            crate::git_service::stage_file(&mut fx.work, "a.txt").expect("暂存解决内容失败");
+            // 多轮冲突下 continue 返回 Ok 且状态可能仍为 Rebasing（下一轮冲突）。
+            let _step = continue_operation(&fx.work, &dir).expect("rebase --continue 失败");
+            rounds += 1;
+            assert!(rounds < 5, "冲突轮次异常");
+        }
+        assert_eq!(crate::git_service::repo_state(&fx.work), RepoState::Clean);
+        assert!(rounds >= 1, "重排互改提交至少应有一轮冲突");
+        // 备份引用仍指向原 HEAD（不丢失提交）
+        assert_eq!(
+            fx.work
+                .find_reference(REBASE_BACKUP_REF)
+                .unwrap()
+                .target()
+                .unwrap()
+                .to_string(),
+            original_head
+        );
+
+        // —— Abort 场景：再次触发冲突后中止，完全恢复 ——
+        let post_continue_head = {
+            let h = fx.work.head().unwrap().peel_to_commit().unwrap();
+            h.id().to_string()
+        };
+        commit_file(&fx.work, "a.txt", "line v3\n", "change three");
+        let c3 = fx.work.head().unwrap().peel_to_commit().unwrap().id().to_string();
+        // 重排（three 在前）→ 与继续后的提交（同改 a.txt）冲突
+        let plan2 = vec![
+            RebasePlanEntry { commit_id: c3.clone(), action: RebaseAction::Pick, message: None },
+            RebasePlanEntry { commit_id: post_continue_head, action: RebaseAction::Pick, message: None },
+        ];
+        let res2 = interactive_rebase(&mut fx.work, &dir, &plan2).expect("第二次冲突应返回 Ok");
+        assert_eq!(res2.repo.state, RepoState::Rebasing);
+        let aborted = abort_operation(&fx.work, &dir).expect("rebase --abort 失败");
+        assert_eq!(aborted.repo.state, RepoState::Clean);
+        assert_eq!(
+            fx.work.head().unwrap().peel_to_commit().unwrap().id().to_string(),
+            c3
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "line v3\n"
+        );
+    }
 }

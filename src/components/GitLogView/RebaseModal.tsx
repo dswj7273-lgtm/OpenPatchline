@@ -1,5 +1,12 @@
 /**
- * 轻量交互式变基弹窗（4.5）：支持对最近 N 个连续非合并提交执行 Pick / Reword / Squash / Fixup。
+ * 交互式变基弹窗（v0.5 §4.5 → v0.7 / 7.3 扩展）：
+ *
+ * - Pick / Reword / Squash / Fixup / Drop 五种动作；
+ * - 行拖拽排序（新顺序 = todo 执行顺序，自上而下逐条应用）；
+ * - 执行前预览：模拟重写后的提交序列；
+ * - 含重排或丢弃时后端委托 `git rebase -i`，可能产生冲突 →
+ *   复用既有冲突编辑器与「继续 / 中止」链路；原历史始终备份于
+ *   refs/opl-backup/rebase。
  */
 import { useEffect, useMemo, useState } from "react";
 import { CloseIcon, RebaseIcon } from "../Icons";
@@ -11,20 +18,31 @@ const ACTION_OPTIONS: { value: RebaseAction; label: string; hint: string }[] = [
   { value: "reword", label: "改写说明 (Reword)", hint: "保留代码变更，修改提交信息" },
   { value: "squash", label: "合并含文 (Squash)", hint: "合并到上一条保留提交并保留其说明" },
   { value: "fixup", label: "合并弃文 (Fixup)", hint: "合并到上一条保留提交并丢弃其说明" },
+  { value: "drop", label: "丢弃 (Drop)", hint: "从历史中移除该提交（经 git rebase -i）" },
 ];
+
+/** 预览中的单个结果条目。 */
+interface PreviewItem {
+  key: string;
+  subject: string;
+  mergedCount: number;
+  dropped: boolean;
+}
 
 export function RebaseModal({ onClose }: { onClose: () => void }) {
   const repo = useAppStore((s) => s.repo);
   const fileStatus = useAppStore((s) => s.fileStatus);
   const gitBusy = useAppStore((s) => s.gitBusy);
   const listRebaseCommits = useAppStore((s) => s.listRebaseCommits);
-  const rewriteRecentCommits = useAppStore((s) => s.rewriteRecentCommits);
+  const interactiveRebase = useAppStore((s) => s.interactiveRebase);
 
   const [limit, setLimit] = useState(10);
   const [commits, setCommits] = useState<RebaseCommitEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [actions, setActions] = useState<Record<string, RebaseAction>>({});
   const [messages, setMessages] = useState<Record<string, string>>({});
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,12 +52,8 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
       setCommits(items);
       setActions((prev) => {
         const next: Record<string, RebaseAction> = {};
-        items.forEach((c, idx) => {
-          const prevAction = prev[c.id];
-          next[c.id] =
-            idx === 0 && (prevAction === "squash" || prevAction === "fixup")
-              ? "pick"
-              : (prevAction ?? "pick");
+        items.forEach((c) => {
+          next[c.id] = prev[c.id] ?? "pick";
         });
         return next;
       });
@@ -77,21 +91,69 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
     [fileStatus],
   );
 
+  /** 当前顺序中第 0 条不可压缩（无前置可合并）。 */
+  const effectiveAction = (id: string, isFirst: boolean): RebaseAction => {
+    const raw = actions[id] ?? "pick";
+    if (isFirst && (raw === "squash" || raw === "fixup")) return "pick";
+    return raw;
+  };
+
+  /** 是否与原顺序（时间旧 → 新）不同：决定走 git rebase -i 还是轻量路径。 */
+  const reordered = useMemo(
+    () =>
+      commits.length > 1 &&
+      commits.some((c, idx) => idx > 0 && commits[idx - 1].timestamp > c.timestamp),
+    [commits],
+  );
+  const hasDrop = useMemo(
+    () => commits.some((c, idx) => effectiveAction(c.id, idx === 0) === "drop"),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [commits, actions],
+  );
+  const risky = reordered || hasDrop;
+
+  /** 执行前预览：模拟重写后的提交序列。 */
+  const preview = useMemo<PreviewItem[]>(() => {
+    const items: PreviewItem[] = [];
+    commits.forEach((c, idx) => {
+      const act = effectiveAction(c.id, idx === 0);
+      if (act === "drop") return;
+      if (act === "squash" || act === "fixup") {
+        const last = items[items.length - 1];
+        if (last) {
+          last.mergedCount += 1;
+          if (act === "squash") {
+            const extra = (messages[c.id] ?? c.fullMessage).trim();
+            if (extra) last.subject = `${last.subject} ＋ ${extra.split("\n")[0]}`;
+          }
+          return;
+        }
+      }
+      items.push({
+        key: c.id,
+        subject:
+          act === "reword"
+            ? (messages[c.id] ?? c.fullMessage).trim().split("\n")[0] || "(空说明)"
+            : c.subject || "(无标题)",
+        mergedCount: 0,
+        dropped: false,
+      });
+    });
+    return items;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commits, actions, messages]);
+
   const summary = useMemo(() => {
-    let kept = 0;
-    let changed = false;
     let invalidReword = false;
     commits.forEach((c, idx) => {
-      const act =
-        idx === 0 && (actions[c.id] === "squash" || actions[c.id] === "fixup")
-          ? "pick"
-          : (actions[c.id] ?? "pick");
-      if (act === "pick" || act === "reword") kept++;
-      if (act !== "pick") changed = true;
+      const act = effectiveAction(c.id, idx === 0);
       if (act === "reword" && !(messages[c.id] ?? "").trim()) invalidReword = true;
     });
-    return { kept, changed, invalidReword };
-  }, [commits, actions, messages]);
+    const changed =
+      commits.some((c, idx) => effectiveAction(c.id, idx === 0) !== "pick") || reordered;
+    return { invalidReword, changed };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commits, actions, messages, reordered]);
 
   const busy = gitBusy !== null || loading;
   const blockedByRepo = hasDirtyTracked || repo?.state !== "clean";
@@ -101,16 +163,39 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
   const submit = async () => {
     if (!canApply) return;
     const plan: RebasePlanEntry[] = commits.map((c, idx) => {
-      const rawAct = actions[c.id] ?? "pick";
-      const act = idx === 0 && (rawAct === "squash" || rawAct === "fixup") ? "pick" : rawAct;
+      const act = effectiveAction(c.id, idx === 0);
       return {
         commitId: c.id,
         action: act,
-        message: act === "reword" ? (messages[c.id] ?? "").trim() : null,
+        message:
+          act === "reword" || act === "squash" ? (messages[c.id] ?? "").trim() || null : null,
       };
     });
-    const ok = await rewriteRecentCommits(plan);
+    const ok = await interactiveRebase(plan);
     if (ok) onClose();
+  };
+
+  /** 拖拽实时重排：进入新行时把拖动项移动到该位置。 */
+  const onDragEnter = (idx: number) => {
+    if (dragIndex === null || dragIndex === idx) return;
+    setCommits((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(dragIndex, 1);
+      next.splice(idx, 0, moved);
+      return next;
+    });
+    setDragIndex(idx);
+  };
+
+  /** 键盘上移 / 下移（拖拽的无障碍替代）。 */
+  const move = (idx: number, delta: -1 | 1) => {
+    const target = idx + delta;
+    if (target < 0 || target >= commits.length) return;
+    setCommits((prev) => {
+      const next = [...prev];
+      [next[idx], next[target]] = [next[target], next[idx]];
+      return next;
+    });
   };
 
   return (
@@ -119,16 +204,17 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
         className="rebase-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="整理最近提交（轻量 Rebase）"
+        aria-label="交互式整理最近提交"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="rebase-header">
           <div className="rebase-title-wrap">
             <RebaseIcon />
             <div>
-              <h2 className="rebase-title">整理最近提交（Squash / Reword）</h2>
+              <h2 className="rebase-title">交互式整理提交（Rebase）</h2>
               <p className="rebase-sub">
-                按时间从旧到新排列（最后一行是当前 HEAD）；合并后提交将折叠至上一条保留的提交
+                自上而下为执行顺序：可拖拽排序、压缩或丢弃；含重排 / 丢弃时经 git rebase -i
+                执行，冲突可在三方编辑器中解决后继续
               </p>
             </div>
           </div>
@@ -157,6 +243,12 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
               : "工作区或暂存区存在未提交修改，请先提交、暂存或贮藏后再执行整理。"}
           </div>
         )}
+        {risky && !blockedByRepo && (
+          <div className="rebase-hint">
+            检测到重排或丢弃：执行中可能出现冲突（原历史已备份于
+            <code> refs/opl-backup/rebase</code>，可随时恢复）
+          </div>
+        )}
 
         <div className="rebase-list">
           {loading ? (
@@ -165,21 +257,52 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
             <p className="rebase-empty">暂无可整理的连续线性提交（可能遇到合并提交或空仓库）。</p>
           ) : (
             commits.map((c, idx) => {
-              const act = actions[c.id] ?? "pick";
+              const act = effectiveAction(c.id, idx === 0);
               const isSquashed = act === "squash" || act === "fixup";
-              const isHead = idx === commits.length - 1;
               return (
                 <div
                   key={c.id}
-                  className={`rebase-item${isSquashed ? " is-squashed" : ""}${act === "reword" ? " is-reword" : ""}`}
+                  className={`rebase-item${isSquashed ? " is-squashed" : ""}${act === "reword" ? " is-reword" : ""}${act === "drop" ? " is-dropped" : ""}${dragIndex === idx ? " is-dragging" : ""}`}
+                  draggable={!busy}
+                  onDragStart={() => setDragIndex(idx)}
+                  onDragEnter={() => onDragEnter(idx)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDragEnd={() => setDragIndex(null)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragIndex(null);
+                  }}
                 >
                   <div className="rebase-item-top">
+                    <span className="rebase-drag" aria-hidden="true" title="拖拽排序">
+                      ⠿
+                    </span>
+                    <span className="rebase-order">{idx + 1}</span>
                     <span className="rebase-sha">{c.shortId}</span>
-                    {isHead && <span className="badge badge-head">HEAD</span>}
                     <span className="rebase-subject" title={c.subject}>
                       {c.subject || "(无标题)"}
                     </span>
                     <span className="rebase-author">{c.authorName}</span>
+                    <span className="rebase-move-btns">
+                      <button
+                        type="button"
+                        className="rebase-move-btn"
+                        aria-label="上移"
+                        disabled={busy || idx === 0}
+                        onClick={() => move(idx, -1)}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="rebase-move-btn"
+                        aria-label="下移"
+                        disabled={busy || idx === commits.length - 1}
+                        onClick={() => move(idx, 1)}
+                      >
+                        ↓
+                      </button>
+                    </span>
                     <select
                       className="input rebase-action-select"
                       aria-label={`操作 ${c.shortId}`}
@@ -199,7 +322,7 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
                           disabled={idx === 0 && (opt.value === "squash" || opt.value === "fixup")}
                           title={
                             idx === 0 && (opt.value === "squash" || opt.value === "fixup")
-                              ? "最早一条提交无前置提交可合并，如需与更早提交合并请调大加载数量"
+                              ? "执行顺序中的第一条无前置提交可合并，如需与更早提交合并请先将其下移或调大加载数量"
                               : opt.hint
                           }
                         >
@@ -225,10 +348,34 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
+        <div className="rebase-preview">
+          <button
+            type="button"
+            className="rebase-preview-toggle"
+            aria-expanded={previewOpen}
+            onClick={() => setPreviewOpen((v) => !v)}
+          >
+            {previewOpen ? "▾" : "▸"} 执行前预览（重写后 {preview.length} 条提交）
+          </button>
+          {previewOpen && (
+            <ol className="rebase-preview-list">
+              {preview.map((item, i) => (
+                <li key={item.key} className="rebase-preview-item">
+                  <span className="rebase-preview-order">{i + 1}</span>
+                  <span className="rebase-preview-subject">{item.subject}</span>
+                  {item.mergedCount > 0 && (
+                    <span className="rebase-preview-merged">＋{item.mergedCount} 条合并</span>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+
         <footer className="rebase-footer">
           <span className="rebase-summary">
             {commits.length > 0 &&
-              `当前 ${commits.length} 条 → 重写后 ${summary.kept} 条提交（改写本地历史，若已推送需使用安全强推）`}
+              `当前 ${commits.length} 条 → 重写后 ${preview.length} 条（改写本地历史，若已推送需使用安全强推）`}
           </span>
           <div className="rebase-footer-btns">
             <button type="button" className="btn" disabled={gitBusy !== null} onClick={onClose}>

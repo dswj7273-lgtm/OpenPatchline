@@ -208,18 +208,23 @@ pub fn rewrite_recent_commits(
                     ));
                 };
                 last_group.last_id = oid;
-                let extra = entry
+                // 自定义文案 = 最终提交说明（与 git rebase -i 编辑器语义一致）；
+                // 未提供时沿用既有拼接语义（分组说明 + 本条说明）。
+                match entry
                     .message
                     .as_deref()
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .unwrap_or(raw_msg);
-                if !extra.is_empty() {
-                    if !last_group.message.is_empty() {
-                        last_group.message.push_str("\n\n");
+                {
+                    Some(custom) => last_group.message = custom.to_string(),
+                    None => {
+                        if !raw_msg.is_empty() {
+                            if !last_group.message.is_empty() {
+                                last_group.message.push_str("\n\n");
+                            }
+                            last_group.message.push_str(&raw_msg);
+                        }
                     }
-                    last_group.message.push_str(&extra);
                 }
             }
             RebaseAction::Fixup => {
@@ -229,6 +234,11 @@ pub fn rewrite_recent_commits(
                     ));
                 };
                 last_group.last_id = oid;
+            }
+            RebaseAction::Drop => {
+                return Err(AppError::InvalidArg(
+                    "丢弃（Drop）仅在交互式变基路径中支持".to_string(),
+                ));
             }
         }
     }

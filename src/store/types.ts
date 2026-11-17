@@ -287,7 +287,7 @@ export interface WorkspaceSlice {
   /** 基于贮藏条目创建并切换分支（v0.7 / 7.4）。 */
   stashBranch: (name: string, index: number) => Promise<boolean>;
   listRebaseCommits: (limit?: number) => Promise<RebaseCommitEntry[]>;
-  rewriteRecentCommits: (plan: RebasePlanEntry[]) => Promise<boolean>;
+  interactiveRebase: (plan: RebasePlanEntry[]) => Promise<boolean>;
 }
 
 export type AppState = RepoSlice &
