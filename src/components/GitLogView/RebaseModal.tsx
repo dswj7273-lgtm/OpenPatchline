@@ -91,12 +91,22 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
     [fileStatus],
   );
 
-  /** 当前顺序中第 0 条不可压缩（无前置可合并）。 */
-  const effectiveAction = (id: string, isFirst: boolean): RebaseAction => {
+  /**
+   * 生效动作：第 0 条不可压缩；若开头连续 Drop，则第一条非 Drop 的条目
+   * 同样不可压缩（Drop 不是可合并的前置，review 修复 #7）。
+   */
+  const effectiveAction = (id: string, idx: number): RebaseAction => {
     const raw = actions[id] ?? "pick";
-    if (isFirst && (raw === "squash" || raw === "fixup")) return "pick";
+    if ((raw === "squash" || raw === "fixup") && idx <= firstNonDropIndex) {
+      return "pick";
+    }
     return raw;
   };
+  /** 第一条非 Drop 条目的下标（无则取列表长度，全部 Drop 时提交被禁用）。 */
+  const firstNonDropIndex = useMemo(() => {
+    const idx = commits.findIndex((c) => (actions[c.id] ?? "pick") !== "drop");
+    return idx < 0 ? commits.length : idx;
+  }, [commits, actions]);
 
   /** 是否与原顺序（时间旧 → 新）不同：决定走 git rebase -i 还是轻量路径。 */
   const reordered = useMemo(
@@ -106,7 +116,7 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
     [commits],
   );
   const hasDrop = useMemo(
-    () => commits.some((c, idx) => effectiveAction(c.id, idx === 0) === "drop"),
+    () => commits.some((c, idx) => effectiveAction(c.id, idx) === "drop"),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [commits, actions],
   );
@@ -116,7 +126,7 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
   const preview = useMemo<PreviewItem[]>(() => {
     const items: PreviewItem[] = [];
     commits.forEach((c, idx) => {
-      const act = effectiveAction(c.id, idx === 0);
+      const act = effectiveAction(c.id, idx);
       if (act === "drop") return;
       if (act === "squash" || act === "fixup") {
         const last = items[items.length - 1];
@@ -146,11 +156,13 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
   const summary = useMemo(() => {
     let invalidReword = false;
     commits.forEach((c, idx) => {
-      const act = effectiveAction(c.id, idx === 0);
-      if (act === "reword" && !(messages[c.id] ?? "").trim()) invalidReword = true;
+      const act = effectiveAction(c.id, idx);
+      // 未编辑时沿用输入框展示的原说明（review 修复 #8）。
+      if (act === "reword" && !(messages[c.id] ?? c.fullMessage).trim()) {
+        invalidReword = true;
+      }
     });
-    const changed =
-      commits.some((c, idx) => effectiveAction(c.id, idx === 0) !== "pick") || reordered;
+    const changed = commits.some((c, idx) => effectiveAction(c.id, idx) !== "pick") || reordered;
     return { invalidReword, changed };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [commits, actions, messages, reordered]);
@@ -163,7 +175,7 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
   const submit = async () => {
     if (!canApply) return;
     const plan: RebasePlanEntry[] = commits.map((c, idx) => {
-      const act = effectiveAction(c.id, idx === 0);
+      const act = effectiveAction(c.id, idx);
       return {
         commitId: c.id,
         action: act,
@@ -257,7 +269,7 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
             <p className="rebase-empty">暂无可整理的连续线性提交（可能遇到合并提交或空仓库）。</p>
           ) : (
             commits.map((c, idx) => {
-              const act = effectiveAction(c.id, idx === 0);
+              const act = effectiveAction(c.id, idx);
               const isSquashed = act === "squash" || act === "fixup";
               return (
                 <div
@@ -319,10 +331,14 @@ export function RebaseModal({ onClose }: { onClose: () => void }) {
                         <option
                           key={opt.value}
                           value={opt.value}
-                          disabled={idx === 0 && (opt.value === "squash" || opt.value === "fixup")}
+                          disabled={
+                            (idx === 0 || idx === firstNonDropIndex) &&
+                            (opt.value === "squash" || opt.value === "fixup")
+                          }
                           title={
-                            idx === 0 && (opt.value === "squash" || opt.value === "fixup")
-                              ? "执行顺序中的第一条无前置提交可合并，如需与更早提交合并请先将其下移或调大加载数量"
+                            (idx === 0 || idx === firstNonDropIndex) &&
+                            (opt.value === "squash" || opt.value === "fixup")
+                              ? "第一条保留的提交无前置可合并（丢弃不算前置），请先将其下移或改为保留"
                               : opt.hint
                           }
                         >

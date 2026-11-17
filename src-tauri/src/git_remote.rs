@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -459,6 +459,12 @@ fn run_git(workdir: &Path, args: &[&str]) -> AppResult<String> {
     Ok(normalize_output(&stdout, &stderr))
 }
 
+/// [`run_git`] 的 crate 内入口（git_service::history 委托 `git log --follow`
+/// 用，review 修复 #3 / #10）。
+pub(crate) fn run_git_for_service(workdir: &Path, args: &[&str]) -> AppResult<String> {
+    run_git(workdir, args)
+}
+
 fn run_git_streaming(
     workdir: &Path,
     args: &[&str],
@@ -470,8 +476,12 @@ fn run_git_streaming(
 
 /// 运行 git 并返回 (是否成功, 规整输出)；非零退出不转为 Err（继续操作多轮冲突时
 /// 退出码非零但操作仍在进行，需要据仓库状态而非退出码判断进度）。
-fn run_git_tolerant(workdir: &Path, args: &[&str]) -> AppResult<(bool, String)> {
-    let child = spawn_git_command_with_envs(workdir, args, false, &[])?;
+fn run_git_tolerant(
+    workdir: &Path,
+    args: &[&str],
+    extra_envs: &[(&str, &str)],
+) -> AppResult<(bool, String)> {
+    let child = spawn_git_command_with_envs(workdir, args, false, extra_envs)?;
     let output = child
         .wait_with_output()
         .map_err(|e| AppError::Io(format!("等待 git 子进程失败: {e}")))?;
@@ -854,14 +864,40 @@ pub fn continue_operation(repo: &git2::Repository, workdir: &Path) -> AppResult<
             return Err(AppError::InvalidArg("当前仓库没有可继续的操作".to_string()));
         }
     };
-    let (ok, output) = run_git_tolerant(workdir, args)?;
+    // 变基进行中且存在持久编辑器（交互式变基暂停）→ 继续沿用同一
+    // GIT_EDITOR，保证冲突之后未消费的 Reword/Squash 说明仍被写入
+    // （review 修复 #2；否则退化为 GIT_EDITOR=true 丢失用户文案）。
+    let editor_path = rebase_editor_dir(repo).join("editor.sh");
+    let editor_str = editor_path.display().to_string();
+    let mut envs: Vec<(&str, &str)> = Vec::new();
+    if state == RepoState::Rebasing && editor_path.is_file() {
+        envs.push(("GIT_EDITOR", editor_str.as_str()));
+    }
+    let (ok, output) = run_git_tolerant(workdir, args, &envs)?;
     if ok {
+        // 操作完成 → 清理交互式变基的持久编辑器目录。
+        if git_service::repo_state(repo) == RepoState::Clean {
+            cleanup_rebase_editor(repo);
+        }
         return action_result(repo, output);
     }
-    // 退出码非零但操作仍进行中（如 rebase 后续步骤再次冲突）→ 返回进度，
-    // 由前端继续驱动「解决 → 继续」循环（v0.7 / 7.3 多轮冲突场景）。
-    if git_service::repo_state(repo) == state {
-        return action_result(repo, format!("{output}\n（仍有待处理步骤，请继续解决冲突后再次「继续」）"));
+    let now = git_service::repo_state(repo);
+    if now == RepoState::Clean {
+        // 退出码非零但操作已完成（个别 git 版本的警告性退出）→ 视为完成。
+        cleanup_rebase_editor(repo);
+        return action_result(repo, output);
+    }
+    // 仍在原操作中：仅当出现了新的冲突（index 含冲突条目）才视为
+    // 「推进到下一步并再次冲突」（v0.7 / 7.3 多轮冲突）；否则为真实
+    // 失败（钩子拒绝、空说明等），如实报错（review 修复 #2 附带）。
+    let has_new_conflicts = git_service::fresh_index(repo)
+        .map(|i| i.has_conflicts())
+        .unwrap_or(false);
+    if now == state && has_new_conflicts {
+        return action_result(
+            repo,
+            format!("{output}\n（仍有待处理步骤，请继续解决冲突后再次「继续」）"),
+        );
     }
     Err(AppError::Git(format!(
         "git {} 失败:\n{}",
@@ -1140,6 +1176,22 @@ pub fn stash_branch(
 /// 变基前备份引用：始终指向最近一次交互式变基开始前的分支头。
 pub const REBASE_BACKUP_REF: &str = "refs/opl-backup/rebase";
 
+/// 变基编辑器持久目录（.git/opl-rebase-editor/，review 修复 #2）：
+/// 冲突暂停时 GIT_EDITOR 脚本与说明文件必须存活到 `rebase --continue`
+/// 完成，tempfile::TempDir 会在函数返回时删除，故放在 .git 下；
+/// 变基完成或中止时清理。
+fn rebase_editor_dir(repo: &git2::Repository) -> PathBuf {
+    repo.path().join("opl-rebase-editor")
+}
+
+/// 清理变基编辑器持久目录（若存在）。
+fn cleanup_rebase_editor(repo: &git2::Repository) {
+    let dir = rebase_editor_dir(repo);
+    if dir.is_dir() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
 /// 允许一次性整理的最大提交数量（与轻量路径保持一致）。
 const MAX_INTERACTIVE_REBASE: usize = 50;
 
@@ -1209,11 +1261,18 @@ pub fn interactive_rebase(
         ));
     }
 
-    if matches!(plan[0].action, crate::types::RebaseAction::Squash)
-        || matches!(plan[0].action, crate::types::RebaseAction::Fixup)
+    // 第一条非 Drop 的动作不能是 Squash/Fixup（Drop 不算可合并的前置提交，
+    // review 修复 #7：否则 git rebase -i 中止报错甚至停在变基中）。
+    if let Some(first_kept) = plan
+        .iter()
+        .find(|e| !matches!(e.action, crate::types::RebaseAction::Drop))
+        && matches!(
+            first_kept.action,
+            crate::types::RebaseAction::Squash | crate::types::RebaseAction::Fixup
+        )
     {
         return Err(AppError::InvalidArg(
-            "新顺序中的第一条提交不能设为压缩（Squash/Fixup）".to_string(),
+            "第一条保留的提交不能设为压缩（Squash/Fixup）：丢弃的提交不可作为合并目标，请先将其下移或改为保留".to_string(),
         ));
     }
 
@@ -1246,9 +1305,11 @@ pub fn interactive_rebase(
         return action_result(repo, output);
     }
 
-    // —— 构造 todo 与编辑器脚本 ——
-    let dir = tempfile::tempdir()
-        .map_err(|e| AppError::Io(format!("创建变基临时目录失败: {e}")))?;
+    // —— 构造 todo 与编辑器脚本（持久化到 .git 下，冲突暂停后仍可用）——
+    cleanup_rebase_editor(repo);
+    let dir = rebase_editor_dir(repo);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| AppError::Io(format!("创建变基编辑器目录失败: {e}")))?;
     let mut todo_lines: Vec<String> = Vec::new();
     // 编辑器消息队列：Reword / Squash 依序消耗。
     let mut editor_messages: Vec<String> = Vec::new();
@@ -1310,15 +1371,15 @@ pub fn interactive_rebase(
         }
     }
 
-    let todo_path = dir.path().join("todo");
+    let todo_path = dir.join("todo");
     std::fs::write(&todo_path, format!("{}\n", todo_lines.join("\n")))
         .map_err(|e| AppError::Io(format!("写入变基 todo 失败: {e}")))?;
 
     // GIT_EDITOR 脚本：第 N 次被调用时写入 msg-N.txt（fixup/drop 不触发编辑器）。
-    let editor_path = dir.path().join("editor.sh");
+    let editor_path = dir.join("editor.sh");
     let script = format!(
-        "#!/bin/sh\nd=\"{d}\"\nn=$(cat \"$d/.n\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/.n\"\nif [ -f \"$d/msg-$n.txt\" ]; then cp \"$d/msg-$n.txt\" \"$1\"; fi\nexit 0\n",
-        d = dir.path().display()
+        "#!/bin/sh\nd=\"{d}\"\nn=$(cat \"$d/.n\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/.n\"\necho \"invoked #$n for $1\" >> \"$d/invocations\"\nif [ -f \"$d/msg-$n.txt\" ]; then cp \"$d/msg-$n.txt\" \"$1\"; fi\nexit 0\n",
+        d = dir.display()
     );
     std::fs::write(&editor_path, script)
         .map_err(|e| AppError::Io(format!("写入变基编辑器脚本失败: {e}")))?;
@@ -1333,7 +1394,7 @@ pub fn interactive_rebase(
             .map_err(|e| AppError::Io(format!("设置编辑器脚本权限失败: {e}")))?;
     }
     for (idx, msg) in editor_messages.iter().enumerate() {
-        std::fs::write(dir.path().join(format!("msg-{}.txt", idx + 1)), format!("{msg}\n"))
+        std::fs::write(dir.join(format!("msg-{}.txt", idx + 1)), format!("{msg}\n"))
             .map_err(|e| AppError::Io(format!("写入变基说明文件失败: {e}")))?;
     }
 
@@ -1369,6 +1430,7 @@ pub fn interactive_rebase(
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
     if output.status.success() {
+        cleanup_rebase_editor(repo);
         let summary = normalize_output(&stdout, &stderr);
         return action_result(
             repo,
@@ -1390,6 +1452,8 @@ pub fn interactive_rebase(
         );
     }
 
+    // 未进入变基状态的真实失败：清理持久编辑器目录。
+    cleanup_rebase_editor(repo);
     let detail = if stderr.trim().is_empty() {
         stdout.trim()
     } else {
@@ -1410,8 +1474,21 @@ pub fn checkout_file_from(
     path: &str,
 ) -> AppResult<GitActionResult> {
     let commit = crate::git_service::find_commit(repo, commit_id)?;
-    let oid = commit.id().to_string();
     crate::git_service::validate_rel_path(path)?;
+    // 该提交删除了此文件（树中无此路径）→ 回退到第一父提交检出
+    // （review 修复 #6：用户意图是"把文件从删除前的版本拿回来"）。
+    let target = if commit.tree().ok().and_then(|t| t.get_path(std::path::Path::new(path)).ok()).is_some() {
+        commit
+    } else if commit.parent_count() > 0 {
+        commit
+            .parent(0)
+            .map_err(|e| AppError::Git(format!("读取父提交失败: {e}")))?
+    } else {
+        return Err(AppError::NotFound(format!(
+            "提交中不存在文件 {path}，且没有可回退的父提交"
+        )));
+    };
+    let oid = target.id().to_string();
     let output = run_git(workdir, &["checkout", &oid, "--", path])?;
     action_result(repo, output)
 }
@@ -2200,9 +2277,14 @@ fn stash_branch_creates_checks_out_and_pops() {
                 )
             };
 
-        // 重排（two 在前，one 在后）→ 第二条 pick 必然冲突
+        // 重排（two 在前，one 在后）→ 第二条 pick 必然冲突；
+        // 首条带 Reword：验证冲突暂停后自定义说明仍被写入（review 修复 #2）。
         let plan = vec![
-            RebasePlanEntry { commit_id: c2, action: RebaseAction::Pick, message: None },
+            RebasePlanEntry {
+                commit_id: c2,
+                action: RebaseAction::Reword,
+                message: Some("change two (reworded)".to_string()),
+            },
             RebasePlanEntry { commit_id: c1, action: RebaseAction::Pick, message: None },
         ];
         let res = interactive_rebase(&mut fx.work, &dir, &plan).expect("冲突应返回 Ok 而非 Err");
@@ -2215,7 +2297,9 @@ fn stash_branch_creates_checks_out_and_pops() {
             if crate::git_service::repo_state(&fx.work) == RepoState::Clean {
                 break;
             }
-            std::fs::write(dir.join("a.txt"), "line merged\n").unwrap();
+            // 每轮写入不同内容，避免后续步骤变成空提交被 --empty 丢弃。
+            let resolved = if rounds % 2 == 0 { "line merged\n" } else { "line merged final\n" };
+            std::fs::write(dir.join("a.txt"), resolved).unwrap();
             crate::git_service::stage_file(&mut fx.work, "a.txt").expect("暂存解决内容失败");
             // 多轮冲突下 continue 返回 Ok 且状态可能仍为 Rebasing（下一轮冲突）。
             let _step = continue_operation(&fx.work, &dir).expect("rebase --continue 失败");
@@ -2224,6 +2308,15 @@ fn stash_branch_creates_checks_out_and_pops() {
         }
         assert_eq!(crate::git_service::repo_state(&fx.work), RepoState::Clean);
         assert!(rounds >= 1, "重排互改提交至少应有一轮冲突");
+        // Reword 的自定义说明在多轮冲突后仍应生效（位于 HEAD~1）。
+        {
+            let final_head = fx.work.head().unwrap().peel_to_commit().unwrap();
+            assert_eq!(final_head.message().unwrap().trim(), "change one");
+            let second = final_head.parent(0).unwrap();
+            assert_eq!(second.message().unwrap().trim(), "change two (reworded)");
+        }
+        // 持久编辑器目录在完成后被清理。
+        assert!(!fx.work.path().join("opl-rebase-editor").exists());
         // 备份引用仍指向原 HEAD（不丢失提交）
         assert_eq!(
             fx.work
@@ -2283,5 +2376,31 @@ fn stash_branch_creates_checks_out_and_pops() {
 
         // 越界路径拒绝
         assert!(checkout_file_from(&fx.work, &dir, &old, "../escape.txt").is_err());
+    }
+    #[test]
+    fn checkout_file_from_deleted_commit_restores_from_parent() {
+        let fx = setup_with_bare_remote();
+        let dir = fx.workdir();
+        commit_file(&fx.work, "a.txt", "v1\n", "create a");
+        let del = commit_file(&fx.work, "b.txt", "temp\n", "add b then delete");
+        // 删除 a.txt 的提交
+        std::fs::remove_file(dir.join("a.txt")).unwrap();
+        {
+            let mut index = fx.work.index().unwrap();
+            index.remove_path(std::path::Path::new("a.txt")).unwrap();
+            index.write().unwrap();
+            let tree = fx.work.find_tree(index.write_tree_to(&fx.work).unwrap()).unwrap();
+            let head = fx.work.head().unwrap().peel_to_commit().unwrap();
+            fx.work
+                .commit(Some("HEAD"), &sig(), &sig(), "delete a.txt", &tree, &[&head])
+                .unwrap();
+        }
+        let del_id = fx.work.head().unwrap().peel_to_commit().unwrap().id().to_string();
+        let _ = del;
+
+        // 在删除提交上恢复 a.txt：应回退到父提交检出，文件失而复得
+        checkout_file_from(&fx.work, &dir, &del_id, "a.txt").expect("恢复已删除文件失败");
+        assert!(dir.join("a.txt").exists());
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v1\n");
     }
 }

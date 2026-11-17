@@ -53,9 +53,9 @@ export function openFileContextMenu(
       key: "copy-path",
       label: "复制路径",
       onSelect: () => {
-        if (!copyText(path)) {
-          useAppStore.setState({ error: "复制路径失败：剪贴板不可用" });
-        }
+        void copyText(path).then((ok) => {
+          if (!ok) useAppStore.setState({ error: "复制路径失败：剪贴板不可用" });
+        });
       },
     },
     ...(extra ?? []),

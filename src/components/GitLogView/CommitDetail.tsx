@@ -19,6 +19,7 @@ import {
 } from "../Icons";
 import * as api from "../../api/client";
 import { useAppStore } from "../../store/app";
+import { copyText } from "../../utils/clipboard";
 import type { ChangedFile, ChangeType, CommitSignatureInfo, SignatureStatus } from "../../types";
 import { formatAbsolute } from "./CommitTable";
 import "./CommitDetail.css";
@@ -42,29 +43,6 @@ const SIGNATURE_LABELS: Record<SignatureStatus, { label: string; tone: string }>
   revoked: { label: "签名密钥已吊销", tone: "danger" },
   unsigned: { label: "未签名", tone: "muted" },
 };
-
-/** 复制文本：优先 Clipboard API，不可用时降级 execCommand。 */
-function copyText(text: string): void {
-  if (navigator.clipboard) {
-    void navigator.clipboard.writeText(text).catch(() => {
-      /* 剪贴板不可用时静默失败 */
-    });
-    return;
-  }
-  const ta = document.createElement("textarea");
-  ta.value = text;
-  ta.style.position = "fixed";
-  ta.style.opacity = "0";
-  document.body.appendChild(ta);
-  ta.select();
-  try {
-    document.execCommand("copy");
-  } catch {
-    /* 忽略 */
-  } finally {
-    ta.remove();
-  }
-}
 
 /** 拆出目录与文件名（目录部分在 UI 中做“截头”省略）。 */
 function splitPath(path: string): { dir: string; base: string } {
@@ -356,8 +334,10 @@ export function CommitDetail({ onOpenRebase }: { onOpenRebase?: () => void }) {
   const body = nlIndex < 0 ? "" : c.message.slice(nlIndex + 1).trim();
 
   const copyId = () => {
-    copyText(c.id);
-    setCopied(true);
+    // 异步复制（review 修复 #9）：成功后才切换"已复制"提示。
+    void copyText(c.id).then((ok) => {
+      if (ok) setCopied(true);
+    });
   };
 
   const busy = gitBusy !== null;

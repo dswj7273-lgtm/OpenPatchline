@@ -1,15 +1,18 @@
 /**
- * 剪贴板工具：优先异步 Clipboard API，不可用（非安全上下文等）时
- * 降级为隐藏 textarea + execCommand。
+ * 剪贴板工具：优先异步 Clipboard API，失败（权限拒绝、窗口不在前台等）
+ * 或不可用时降级为隐藏 textarea + execCommand（review 修复 #9：此前
+ * writeText 一经存在立即返回 true，异步失败被吞、界面假报成功）。
  *
  * 返回是否复制成功；调用方据此展示"已复制"提示。
  */
-export function copyText(text: string): boolean {
+export async function copyText(text: string): Promise<boolean> {
   if (navigator.clipboard?.writeText) {
-    void navigator.clipboard.writeText(text).catch(() => {
-      /* 异步失败时静默（下方同步路径已兜底过一次） */
-    });
-    return true;
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      /* 落入下方同步兜底 */
+    }
   }
   try {
     const ta = document.createElement("textarea");

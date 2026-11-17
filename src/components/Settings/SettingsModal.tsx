@@ -110,7 +110,13 @@ function SettingsTextInput({
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onFocus={() => setFocused(true)}
-      onBlur={commit}
+      onBlur={() => {
+        // 先提交草稿再解除聚焦标记：解除后 effect 才能把外部值
+        // （后端规整回写 / 浏览按钮选择的结果）同步进输入框
+        //（review 修复 #4：此前 focused 一旦为真不再回读外部值）。
+        commit();
+        setFocused(false);
+      }}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
           e.preventDefault();

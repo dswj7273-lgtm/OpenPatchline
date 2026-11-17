@@ -281,9 +281,9 @@ export function DiffView() {
       }
     }
     if (lines.length === 0) return;
-    if (!copyText(lines.join("\n"))) {
-      useAppStore.setState({ error: "复制失败：剪贴板不可用" });
-    }
+    void copyText(lines.join("\n")).then((ok) => {
+      if (!ok) useAppStore.setState({ error: "复制失败：剪贴板不可用" });
+    });
   }, [highlightedKeys]);
 
   /** 文件路径右键菜单：编辑器 / Finder / 复制路径 / 生成补丁（docs/11 §三 6.7 / 6.8）。 */
@@ -313,8 +313,9 @@ export function DiffView() {
                 onSelect: () => {
                   void api
                     .generateFilePatch(repo.id, state.diffScope!, path)
-                    .then((patch) => {
-                      if (!copyText(patch)) {
+                    .then((patch) => copyText(patch))
+                    .then((ok) => {
+                      if (!ok) {
                         useAppStore.setState({ error: "复制补丁失败：剪贴板不可用" });
                       } else {
                         useAppStore.setState({ notice: `已复制 ${path} 的补丁文本` });

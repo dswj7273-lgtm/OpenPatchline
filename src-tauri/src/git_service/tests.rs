@@ -1725,6 +1725,79 @@ fn file_history_follows_rename() {
     assert_eq!(limited.len(), 2);
 }
 
+/// review 修复 #3：合并历史（侧分支重命名 a→b）不影响主线 b.txt 的历史。
+#[test]
+fn file_history_survives_merge_history_with_side_rename() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    // 主线：创建 b.txt 并两次修改
+    let c1 = commit_file(&repo, "b.txt", "v1\n", "main: create b");
+    let c2 = commit_file(&repo, "b.txt", "v1\nv2\n", "main: edit b");
+    let _c3 = commit_file(&repo, "other.txt", "x\n", "main: other");
+
+    // 侧分支：把 a.txt 重命名为 b.txt（与主线 b.txt 无关的另一来源）
+    commit_file(&repo, "a.txt", "aaa\n", "main: create a");
+    let side_commit0 = repo
+        .commit(
+            Some("refs/heads/side-src"),
+            &sig(),
+            &sig(),
+            "side base",
+            &repo.head().unwrap().peel_to_commit().unwrap().tree().unwrap(),
+            &[&repo.head().unwrap().peel_to_commit().unwrap()],
+        )
+        .unwrap();
+    let side_commit0 = repo
+        .find_commit(side_commit0)
+        .expect("解析侧分支基准提交失败");
+    rename_on_disk(&repo, "a.txt", "b.txt");
+    {
+        let mut index = repo.index().unwrap();
+        index.remove_path(Path::new("a.txt")).unwrap();
+        index.add_path(Path::new("b.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree_to(&repo).unwrap()).unwrap();
+        repo.commit(
+            Some("refs/heads/side-src"),
+            &sig(),
+            &sig(),
+            "side: rename a to b",
+            &tree,
+            &[&side_commit0],
+        )
+        .unwrap();
+    }
+    // 回到默认分支（HEAD）并合并 side-src
+    let default_branch = repo.head().unwrap().shorthand().unwrap().to_string();
+    let main_tip = repo.find_reference(&format!("refs/heads/{default_branch}")).unwrap().peel_to_commit().unwrap();
+    std::fs::write(dir.path().join("a.txt"), "aaa merged\n").unwrap();
+    std::fs::remove_file(dir.path().join("b.txt")).unwrap();
+    // 合并会冲突（两侧都有 b.txt）——改用手工合并树：保留主线 b.txt 内容与 a.txt
+    let mut index = repo.index().unwrap();
+    index.read_tree(&main_tip.tree().unwrap()).unwrap();
+    index.add_path(Path::new("a.txt")).unwrap();
+    index.write().unwrap();
+    let merge_tree = repo.find_tree(index.write_tree_to(&repo).unwrap()).unwrap();
+    repo.commit(
+        Some("HEAD"),
+        &sig(),
+        &sig(),
+        "merge side-src",
+        &merge_tree,
+        &[&main_tip, &side_commit0],
+    )
+    .unwrap();
+    // 主线后续再改 b.txt
+    let c5 = commit_file(&repo, "b.txt", "v1\nv2\nv3\n", "main: edit b again");
+
+    // 按 b.txt 追溯：必须包含主线最新提交（自研全 DAG 实现会在此丢提交）
+    let hist = file_history(&repo, "b.txt", 100).unwrap();
+    let ids: Vec<&str> = hist.iter().map(|e| e.commit_id.as_str()).collect();
+    assert!(ids.contains(&c5.as_str()), "主线最新提交丢失: {ids:?}");
+    assert!(ids.contains(&c2.as_str()), "主线早期提交丢失: {ids:?}");
+    assert!(ids.contains(&c1.as_str()), "主线创建提交丢失: {ids:?}");
+}
+
 /// v0.7 / 7.4：stash 变更文件与单文件 diff 与 `git stash show` 口径一致。
 #[test]
 fn stash_files_and_diff_match_git_show() {
@@ -1761,6 +1834,60 @@ fn stash_files_and_diff_match_git_show() {
         changed_files_stash(&repo, 5),
         Err(AppError::NotFound(_))
     ));
+}
+
+/// review 修复验证：多条贮藏时 stash@{0} 指最新一条；-u 未跟踪文件参与预览。
+#[test]
+fn stash_preview_indexes_latest_and_includes_untracked() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    let _c1 = commit_file(&repo, "base.txt", "v1\n", "init");
+
+    // 先贮藏 A（修改 a.txt），再贮藏 B（修改 b.txt + 未跟踪 new.txt）
+    std::fs::write(dir.path().join("a.txt"), "a-stash\n").unwrap();
+    let out = std::process::Command::new("git")
+        .current_dir(dir.path())
+        .args(["stash", "push", "-u", "-m", "stash A"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    std::fs::write(dir.path().join("b.txt"), "b-stash\n").unwrap();
+    std::fs::write(dir.path().join("new.txt"), "untracked\n").unwrap();
+    let out = std::process::Command::new("git")
+        .current_dir(dir.path())
+        .args(["stash", "push", "-u", "-m", "stash B"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    // stash@{0} = 最新（B）：b.txt 修改 + new.txt 未跟踪
+    let files = changed_files_stash(&repo, 0).expect("stash@{0} 失败");
+    let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+    assert!(paths.contains(&"b.txt"), "stash@{{0}} 应含 b.txt，实际 {paths:?}");
+    assert!(paths.contains(&"new.txt"), "-u 未跟踪文件应参与预览");
+    assert!(!paths.contains(&"a.txt"), "stash@{{0}} 不应看到最旧的 A");
+
+    // stash@{1} = A：a.txt 修改
+    let files1 = changed_files_stash(&repo, 1).expect("stash@{1} 失败");
+    let paths1: Vec<&str> = files1.iter().map(|f| f.path.as_str()).collect();
+    assert!(paths1.contains(&"a.txt"));
+    assert!(!paths1.contains(&"b.txt"));
+
+    // 未跟踪文件单文件 diff 可看
+    let diff = file_diff_stash(&repo, 0, "new.txt", false).expect("未跟踪 diff 失败");
+    assert_eq!(diff.additions, 1);
+
+    // 只有未跟踪文件的贮藏：不再返回空列表
+    std::fs::write(dir.path().join("solo.txt"), "solo\n").unwrap();
+    let out = std::process::Command::new("git")
+        .current_dir(dir.path())
+        .args(["stash", "push", "-u", "-m", "untracked only"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let files2 = changed_files_stash(&repo, 0).expect("untracked-only 贮藏失败");
+    assert!(files2.iter().any(|f| f.path == "solo.txt"));
 }
 
 /// v0.7 / 7.5：branches_containing 按祖先关系判定（本地 + 远程）。

@@ -135,9 +135,9 @@ export function FileHistoryView() {
       key: "copy",
       label: "复制完整 SHA",
       onSelect: () => {
-        if (!copyText(entry.commitId)) {
-          useAppStore.setState({ error: "复制失败：剪贴板不可用" });
-        }
+        void copyText(entry.commitId).then((ok) => {
+          if (!ok) useAppStore.setState({ error: "复制失败：剪贴板不可用" });
+        });
       },
     },
   ];

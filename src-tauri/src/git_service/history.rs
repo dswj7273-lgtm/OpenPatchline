@@ -200,120 +200,94 @@ fn commit_to_node(
 
 /// 单个文件的提交历史（`git log --follow` 语义，v0.7 / 7.1）。
 ///
-/// 自 HEAD 起按拓扑序遍历：逐提交与第一父提交做 pathspec 过滤的树对比，
-/// 命中即产出一条 [`FileHistoryEntry`]；命中重命名后继续追踪旧路径。
-/// 与代码库其他视图一致，合并提交按第一父提交比较。
+/// 直接委托 `git log --follow --name-status`（review 修复 #3 / #10）：
+/// 自研的全 DAG 遍历会在合并历史上跟错路径，且逐提交全树 diff 在大仓库
+/// 上不可用；git 自身的 follow 实现是唯一正确的参照口径。
 pub fn file_history(
     repo: &git2::Repository,
     path: &str,
     limit: usize,
 ) -> AppResult<Vec<FileHistoryEntry>> {
-    let mut current_path = super::validate_rel_path(path)?
-        .to_string_lossy()
-        .into_owned();
-    let mut walk = repo
-        .revwalk()
-        .map_err(|e| AppError::Git(format!("创建 revwalk 失败: {e}")))?;
-    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)
-        .map_err(|e| AppError::Git(format!("设置遍历排序失败: {e}")))?;
-    walk.push_head()
-        .map_err(|e| AppError::NotFound(format!("HEAD 不可用（空仓库？），无法读取文件历史: {e}")))?;
+    let rel = super::validate_rel_path(path)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| AppError::InvalidArg("bare 仓库没有工作区".to_string()))?
+        .to_path_buf();
+    let limit = limit.clamp(1, MAX_HISTORY_LIMIT);
+    let out = crate::git_remote::run_git_for_service(
+        &workdir,
+        &[
+            "log",
+            "--follow",
+            &format!("-n{limit}"),
+            "--name-status",
+            "--format=%x1e%H%x1f%h%x1f%an%x1f%at%x1f%s",
+            "--",
+            &rel.to_string_lossy(),
+        ],
+    )?;
 
-    let mut entries = Vec::new();
-    for oid in walk {
-        if entries.len() >= limit {
-            break;
+    let mut entries: Vec<FileHistoryEntry> = Vec::new();
+    // 每个条目以 \x1e 开头：字段行 + name-status 行（\t 分列）。
+    for chunk in out.split('\x1e') {
+        let chunk = chunk.trim_matches('\n');
+        if chunk.is_empty() {
+            continue;
         }
-        let oid = oid.map_err(|e| AppError::Git(format!("遍历提交历史失败: {e}")))?;
-        let commit = repo
-            .find_commit(oid)
-            .map_err(|e| AppError::Git(format!("读取提交 {oid} 失败: {e}")))?;
-        let new_tree = commit
-            .tree()
-            .map_err(|e| AppError::Git(format!("读取提交树失败: {e}")))?;
-        let parent_tree = if commit.parent_count() == 0 {
-            None
-        } else {
-            let parent = commit
-                .parent(0)
-                .map_err(|e| AppError::Git(format!("读取父提交失败: {e}")))?;
-            let tree = parent
-                .tree()
-                .map_err(|e| AppError::Git(format!("读取父提交树失败: {e}")))?;
-            Some(tree)
+        let mut lines = chunk.lines();
+        let Some(fields) = lines.next() else { continue };
+        let mut it = fields.split('\x1f');
+        let (Some(commit_id), Some(short_id), Some(author_name), Some(ts), Some(summary)) = (
+            it.next(),
+            it.next(),
+            it.next(),
+            it.next(),
+            it.next(),
+        ) else {
+            continue;
         };
-
-        // 全量树 diff（context 0）+ 重命名配对：pathspec 会把重命名 delta 的
-        // 旧侧过滤掉、find_similar 无法配对，因此不过滤、在结果中按路径命中。
-        let mut opts = git2::DiffOptions::new();
-        opts.context_lines(0);
-        let mut diff = repo
-            .diff_tree_to_tree(parent_tree.as_ref(), Some(&new_tree), Some(&mut opts))
-            .map_err(|e| AppError::Git(format!("计算文件历史 diff 失败: {e}")))?;
-        let mut find = git2::DiffFindOptions::new();
-        find.renames(true).for_untracked(true);
-        if let Err(e) = diff.find_similar(Some(&mut find)) {
-            // 重命名检测失败不影响普通条目，跳过该提交的重命名跟随。
-            let _ = e;
+        // name-status 行：M/A/D/T <path> 或 R100/Cxx <old> <new>。
+        let Some(status_line) = lines.find(|l| !l.trim().is_empty()) else {
+            continue;
+        };
+        let cols: Vec<&str> = status_line.split('\t').collect();
+        if cols.len() < 2 {
+            continue;
         }
-
-        let hit = super::diff::find_delta(diff.deltas(), &current_path, true);
-        let Some(delta) = hit else {
-            continue; // 本提交未改动该文件
-        };
-        let status = delta.status();
-        // 命中旧侧（文件被改名走 / 删除）时仍以当前追踪路径为准；
-        // 命中新侧的重命名，old 侧即改名来源。
-        let matched_old_side = delta
-            .old_file()
-            .path()
-            .and_then(|p| p.to_str())
-            .is_some_and(|p| p == current_path);
-        let old_path = delta
-            .old_file()
-            .path()
-            .and_then(|p| p.to_str())
-            .map(str::to_string)
-            .filter(|p| p != &current_path);
-        let new_path = delta
-            .new_file()
-            .path()
-            .and_then(|p| p.to_str())
-            .map(str::to_string);
-        let change_type = super::delta_change_type(status).unwrap_or(ChangeType::Modified);
-        let summary = commit
-            .message()
-            .unwrap_or_default()
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .to_string();
-        let id = commit.id().to_string();
-        // 重命名来源在构造条目前留一份副本，供 --follow 继续追踪。
-        let rename_from = if matches!(change_type, ChangeType::Renamed) && !matched_old_side {
-            old_path.clone()
-        } else {
-            None
-        };
-        entries.push(FileHistoryEntry {
-            short_id: id.chars().take(7).collect(),
-            commit_id: id,
-            author_name: commit.author().name().unwrap_or_default().to_string(),
-            timestamp: commit.time().seconds(),
-            summary,
-            change_type,
-            // 展示与后续 diff 查询使用的路径：命中新侧用新路径，否则保持追踪路径。
-            path: if matched_old_side {
-                current_path.clone()
+        let code = cols[0];
+        let (change_type, entry_path, old_path) = if let Some(pct) =
+            code.strip_prefix('R').or_else(|| code.strip_prefix('C'))
+        {
+            let _ = pct;
+            // R/C：<old> <new>（--follow 单路径下每提交一条状态）
+            if cols.len() >= 3 {
+                (ChangeType::Renamed, cols[2].to_string(), Some(cols[1].to_string()))
             } else {
-                new_path.unwrap_or_else(|| current_path.clone())
-            },
-            old_path: rename_from.clone(),
+                (ChangeType::Modified, cols[1].to_string(), None)
+            }
+        } else {
+            let ct = match code {
+                "A" => ChangeType::Added,
+                "D" => ChangeType::Deleted,
+                // T（类型变更）按修改处理
+                _ => ChangeType::Modified,
+            };
+            (ct, cols[1].to_string(), None)
+        };
+        let timestamp = ts.parse::<i64>().unwrap_or(0);
+        entries.push(FileHistoryEntry {
+            commit_id: commit_id.to_string(),
+            short_id: short_id.to_string(),
+            author_name: author_name.to_string(),
+            timestamp,
+            summary: summary.to_string(),
+            change_type,
+            path: entry_path,
+            old_path,
         });
-        // 重命名（旧 → 当前追踪路径）→ 继续按旧路径向更早追溯。
-        if let Some(old) = rename_from {
-            current_path = old;
-        }
     }
     Ok(entries)
 }
+
+/// 单文件历史上限（与前端默认一致）。
+const MAX_HISTORY_LIMIT: usize = 1000;

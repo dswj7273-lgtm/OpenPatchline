@@ -357,9 +357,11 @@ export function BlameView() {
                             key: "copy-line",
                             label: "复制此行内容",
                             onSelect: () => {
-                              if (!copyText(line.content)) {
-                                useAppStore.setState({ error: "复制失败：剪贴板不可用" });
-                              }
+                              void copyText(line.content).then((ok) => {
+                                if (!ok) {
+                                  useAppStore.setState({ error: "复制失败：剪贴板不可用" });
+                                }
+                              });
                             },
                           },
                         ];

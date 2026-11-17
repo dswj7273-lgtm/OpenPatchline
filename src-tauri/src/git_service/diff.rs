@@ -1,5 +1,6 @@
 //! 提交 / 暂存区 / 工作区文件差异计算子模块。
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use super::{
@@ -475,24 +476,43 @@ fn is_binary_blob(repo: &git2::Repository, oid: git2::Oid) -> bool {
     }
 }
 
-/// 解析 stash@{index} 对应的贮藏提交（refs/stash reflog 自新至旧第 index 条）。
+/// 解析 stash@{index} 对应的贮藏提交。
+///
+/// libgit2 `Reflog::get(0)` 即最新一条（与 `stash@{0}` 语义一致），
+/// 因此直接按下标取（review 修复：此前 `count - index - 1` 从最旧侧数起，
+/// 多条贮藏时会看错条目）。
 fn stash_commit<'r>(repo: &'r git2::Repository, index: u32) -> AppResult<git2::Commit<'r>> {
     let reflog = repo
         .reflog("refs/stash")
         .map_err(|e| AppError::NotFound(format!("读取贮藏栈失败（无贮藏条目？）: {e}")))?;
-    let count = reflog.len();
-    let pos = count
-        .checked_sub(index as usize + 1)
-        .ok_or_else(|| AppError::NotFound(format!("stash@{{{index}}} 不存在")))?;
     let oid = reflog
-        .get(pos)
+        .get(index as usize)
         .ok_or_else(|| AppError::NotFound(format!("stash@{{{index}}} 不存在")))?
         .id_new();
     repo.find_commit(oid)
         .map_err(|e| AppError::Git(format!("读取贮藏提交失败: {e}")))
 }
 
-/// 贮藏条目变更文件列表：stash 提交 vs 其基准父提交（`git stash show` 口径）。
+/// 贮藏条目的未跟踪文件树（第三父提交；`git stash push -u` 时存在）。
+/// `git stash show` 默认不含未跟踪文件，本应用统一按 `-u` 口径展示（review 修复）。
+fn stash_untracked_tree<'r>(
+    _repo: &'r git2::Repository,
+    stash: &git2::Commit<'r>,
+) -> AppResult<Option<git2::Tree<'r>>> {
+    if stash.parent_count() < 3 {
+        return Ok(None);
+    }
+    let untracked_commit = stash
+        .parent(2)
+        .map_err(|e| AppError::Git(format!("读取贮藏未跟踪父提交失败: {e}")))?;
+    let tree = untracked_commit
+        .tree()
+        .map_err(|e| AppError::Git(format!("读取未跟踪文件树失败: {e}")))?;
+    Ok(Some(tree))
+}
+
+/// 贮藏条目变更文件列表：stash 提交 vs 其基准父提交，含 `-u` 未跟踪文件
+/// （等价 `git stash show -u`，review 修复：未跟踪文件在第三父提交树里）。
 pub fn changed_files_stash(repo: &git2::Repository, index: u32) -> AppResult<Vec<ChangedFile>> {
     let stash = stash_commit(repo, index)?;
     let base_tree = stash
@@ -503,7 +523,27 @@ pub fn changed_files_stash(repo: &git2::Repository, index: u32) -> AppResult<Vec
     let stash_tree = stash
         .tree()
         .map_err(|e| AppError::Git(format!("读取贮藏提交树失败: {e}")))?;
-    changed_files_between_trees(repo, Some(&base_tree), Some(&stash_tree), &format!("stash@{{{index}}}"))
+    let mut files = changed_files_between_trees(
+        repo,
+        Some(&base_tree),
+        Some(&stash_tree),
+        &format!("stash@{{{index}}}"),
+    )?;
+    if let Some(untracked_tree) = stash_untracked_tree(repo, &stash)? {
+        let extra = changed_files_between_trees(
+            repo,
+            Some(&base_tree),
+            Some(&untracked_tree),
+            &format!("stash@{{{index}}} 未跟踪文件"),
+        )?;
+        let known: HashSet<String> = files.iter().map(|f| f.path.clone()).collect();
+        for f in extra {
+            if !known.contains(&f.path) {
+                files.push(f);
+            }
+        }
+    }
+    Ok(files)
 }
 
 /// 贮藏条目中单个文件的左右分栏 diff（stash 提交 vs 基准父提交）。
@@ -523,6 +563,20 @@ pub fn file_diff_stash(
     let stash_tree = stash
         .tree()
         .map_err(|e| AppError::Git(format!("读取贮藏提交树失败: {e}")))?;
+    // 路径不在贮藏主树时，尝试未跟踪文件树（`-u` 口径）。
+    if stash_tree.get_path(Path::new(path)).is_err()
+        && let Some(untracked_tree) = stash_untracked_tree(repo, &stash)?
+        && untracked_tree.get_path(Path::new(path)).is_ok()
+    {
+        return file_diff_between_trees(
+            repo,
+            Some(&base_tree),
+            Some(&untracked_tree),
+            path,
+            &format!("stash@{{{index}}} 未跟踪文件"),
+            ignore_ws,
+        );
+    }
     file_diff_between_trees(
         repo,
         Some(&base_tree),
