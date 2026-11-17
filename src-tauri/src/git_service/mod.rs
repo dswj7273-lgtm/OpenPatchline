@@ -7,10 +7,14 @@
 //! - [`status`]：工作区状态、stage / unstage；
 //! - [`commit`]：创建提交、模板与签名元数据、状态收尾；
 //! - [`branch`]：分支列表、检出与远程跟踪分支；
-//! - [`rebase`]：轻量交互式变基（squash / fixup / reword 最近提交）。
+//! - [`rebase`]：轻量交互式变基（squash / fixup / reword 最近提交）；
+//! - [`conflict`]：三方合并冲突详情读取与解决写入；
+//! - [`blame`]：逐行 Blame 归属查询。
 
+mod blame;
 mod branch;
 mod commit;
+mod conflict;
 mod diff;
 mod history;
 mod patch;
@@ -25,10 +29,12 @@ use std::path::{Component, Path, PathBuf};
 use crate::error::{AppError, AppResult};
 use crate::types::{ChangeType, ChildRepo, RepoInfo, RepoState};
 
+pub use blame::file_blame;
 pub use branch::{checkout_branch, list_branches};
 pub use commit::{
     commit_metadata, commit_signature_info, create_commit, create_commit_with_options,
 };
+pub use conflict::{get_conflict_file, resolve_conflict_file};
 pub use diff::{
     changed_files, changed_files_range, file_diff_commit, file_diff_range, file_diff_staged,
     file_diff_workdir,

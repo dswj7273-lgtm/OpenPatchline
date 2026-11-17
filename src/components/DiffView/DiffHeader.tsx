@@ -12,6 +12,7 @@ import {
   ArrowRightIcon,
   ArrowUpIcon,
   CloseIcon,
+  HistoryIcon,
   LinkIcon,
   SplitViewIcon,
   UnifiedViewIcon,
@@ -38,6 +39,7 @@ export interface DiffHeaderProps {
   onPrevFile: () => void;
   onNextFile: () => void;
   onSelectFile: (index: number) => void;
+  onOpenBlame?: () => void;
   onClose: () => void;
 }
 
@@ -86,6 +88,7 @@ export default function DiffHeader({
   onPrevFile,
   onNextFile,
   onSelectFile,
+  onOpenBlame,
   onClose,
 }: DiffHeaderProps) {
   const { oldPath, newPath } = diff;
@@ -223,6 +226,19 @@ export default function DiffHeader({
             <span>统一</span>
           </button>
         </div>
+
+        {onOpenBlame && (
+          <button
+            type="button"
+            className="diff-header__btn diff-header__blame"
+            aria-label="查看逐行 Blame"
+            title="查看逐行 Blame"
+            onClick={onOpenBlame}
+          >
+            <HistoryIcon />
+            <span>Blame</span>
+          </button>
+        )}
 
         <button
           type="button"

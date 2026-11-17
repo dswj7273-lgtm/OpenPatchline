@@ -13,6 +13,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   CompareIcon,
+  HistoryIcon,
   MergeIcon,
   MinusIcon,
   PlusIcon,
@@ -220,6 +221,7 @@ function FileRow({
   onOpen,
   onToggleStage,
   onDiscard,
+  onBlame,
 }: {
   entry: FileStatus;
   side: "staged" | "unstaged";
@@ -230,19 +232,24 @@ function FileRow({
   onOpen: () => void;
   onToggleStage: () => void;
   onDiscard?: () => void;
+  onBlame?: () => void;
 }) {
   const isConflict = entry.conflicted;
   const changeType = (side === "staged" ? entry.staged : entry.unstaged) ?? "modified";
   const sideLabel = isConflict
-    ? "存在冲突"
+    ? "存在冲突（点击打开三方合并）"
     : changeType === "untracked"
       ? "未跟踪"
       : side === "staged"
         ? "已暂存"
         : "未暂存";
   const letter = isConflict ? "C" : CHANGE_LETTER[changeType];
-  const label = isConflict ? "合并冲突（解决后点击右侧标记为已解决）" : CHANGE_LABEL[changeType];
+  const label = isConflict
+    ? "合并冲突（点击打开三方合并编辑器，或点击右侧标记已解决）"
+    : CHANGE_LABEL[changeType];
   const { dir, base } = splitPath(entry.path);
+  const canBlame =
+    !isConflict && changeType !== "untracked" && changeType !== "added" && Boolean(onBlame);
   return (
     <div
       className={`sidebar-file sidebar-file--${isConflict ? "conflicted" : changeType}${active ? " is-active" : ""}`}
@@ -266,6 +273,17 @@ function FileRow({
           <span className="sidebar-file-base">{base}</span>
         </span>
       </button>
+      {canBlame && onBlame && (
+        <button
+          type="button"
+          className="icon-btn sidebar-stage-btn"
+          aria-label={`查看 ${entry.path} 的 Blame`}
+          title="查看逐行 Blame"
+          onClick={onBlame}
+        >
+          <HistoryIcon />
+        </button>
+      )}
       {side === "unstaged" && !isConflict && onDiscard && (
         <button
           type="button"
@@ -310,6 +328,7 @@ function TreeView({
   onStageDir,
   onStageFile,
   onDiscardFile,
+  onBlameFile,
 }: {
   node: DirNode;
   depth: number;
@@ -322,6 +341,7 @@ function TreeView({
   onStageDir: (path: string, visiblePaths: string[]) => void;
   onStageFile: (path: string) => void;
   onDiscardFile?: (path: string) => void;
+  onBlameFile?: (path: string) => void;
 }) {
   const pad = { paddingLeft: `${8 + depth * 14}px` };
   return (
@@ -370,6 +390,7 @@ function TreeView({
               onStageDir={onStageDir}
               onStageFile={onStageFile}
               onDiscardFile={onDiscardFile}
+              onBlameFile={onBlameFile}
             />
           )}
         </div>
@@ -386,6 +407,7 @@ function TreeView({
           onOpen={() => onOpenFile(f)}
           onToggleStage={() => onStageFile(f.path)}
           onDiscard={onDiscardFile ? () => onDiscardFile(f.path) : undefined}
+          onBlame={onBlameFile ? () => onBlameFile(f.path) : undefined}
         />
       ))}
     </>
@@ -802,9 +824,12 @@ export function Sidebar() {
   const unstageFile = useAppStore((s) => s.unstageFile);
   const unstageFiles = useAppStore((s) => s.unstageFiles);
   const openFileDiff = useAppStore((s) => s.openFileDiff);
+  const openConflictFile = useAppStore((s) => s.openConflictFile);
+  const openFileBlame = useAppStore((s) => s.openFileBlame);
   const discardFile = useAppStore((s) => s.discardFile);
   const gitBusy = useAppStore((s) => s.gitBusy);
   const activeView = useAppStore((s) => s.activeView);
+  const conflictPath = useAppStore((s) => s.conflictPath);
   const diffScope = useAppStore((s) => s.diffScope);
   const diffFiles = useAppStore((s) => s.diffFiles);
   const selectedDiffFileIndex = useAppStore((s) => s.selectedDiffFileIndex);
@@ -880,6 +905,7 @@ export function Sidebar() {
     activeView === "diff" ? (diffFiles[selectedDiffFileIndex]?.path ?? null) : null;
   const activeStagedPath = diffScope?.kind === "staged" ? activeDiffPath : null;
   const activeWorkdirPath = diffScope?.kind === "workdir" ? activeDiffPath : null;
+  const activeConflictPath = activeView === "conflict" ? conflictPath : null;
 
   const toggleDir = (path: string) => {
     setExpandedDirs((prev) => {
@@ -976,9 +1002,9 @@ export function Sidebar() {
                 depth={0}
                 side="unstaged"
                 expanded={expandedDirs}
-                activePath={activeWorkdirPath}
+                activePath={activeConflictPath ?? activeWorkdirPath}
                 onToggleDir={toggleDir}
-                onOpenFile={(f) => openEntry(f, "unstaged")}
+                onOpenFile={(f) => void openConflictFile(f.path)}
                 onStageDir={(_, paths) => void stageFiles(paths)}
                 onStageFile={(p) => void stageFile(p)}
               />
@@ -1006,6 +1032,7 @@ export function Sidebar() {
                 onOpenFile={(f) => openEntry(f, "staged")}
                 onStageDir={(_, paths) => void unstageFiles(paths)}
                 onStageFile={(p) => void unstageFile(p)}
+                onBlameFile={(p) => void openFileBlame(p, null, { returnView: "log" })}
               />
             ) : (
               <p className="sidebar-group-empty">暂无已暂存更改</p>
@@ -1034,6 +1061,7 @@ export function Sidebar() {
                 onStageDir={(_, paths) => void stageFiles(paths)}
                 onStageFile={(p) => void stageFile(p)}
                 onDiscardFile={(p) => setConfirmDiscard({ path: p, untracked: false })}
+                onBlameFile={(p) => void openFileBlame(p, null, { returnView: "log" })}
               />
             ) : (
               <p className="sidebar-group-empty">工作区无未暂存修改</p>

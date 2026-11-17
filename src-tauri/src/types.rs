@@ -534,3 +534,59 @@ pub struct RebasePlanEntry {
     #[serde(default)]
     pub message: Option<String>,
 }
+
+/// 冲突文件的三方内容与当前工作区快照（用于三方合并冲突编辑器）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictFileDetail {
+    pub path: String,
+    pub is_binary: bool,
+    pub too_large: bool,
+    pub base_exists: bool,
+    pub ours_exists: bool,
+    pub theirs_exists: bool,
+    pub workdir_exists: bool,
+    pub base_content: String,
+    pub ours_content: String,
+    pub theirs_content: String,
+    pub workdir_content: String,
+    pub ours_label: String,
+    pub theirs_label: String,
+}
+
+/// Blame 中关联的单个提交元信息（按 commit_id 去重存储）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlameCommitInfo {
+    pub id: String,
+    pub short_id: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub timestamp: i64,
+    pub summary: String,
+    pub parent_ids: Vec<String>,
+    pub is_uncommitted: bool,
+}
+
+/// 文件单行的 Blame 归属信息。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlameLine {
+    pub line_no: u32,
+    pub orig_line_no: u32,
+    pub orig_path: Option<String>,
+    pub commit_id: String,
+    pub content: String,
+}
+
+/// 单文件 Blame 查询结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileBlameResult {
+    pub path: String,
+    pub commit_id: Option<String>,
+    pub is_binary: bool,
+    pub too_large: bool,
+    pub commits: std::collections::HashMap<String, BlameCommitInfo>,
+    pub lines: Vec<BlameLine>,
+}

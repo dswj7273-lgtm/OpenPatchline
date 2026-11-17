@@ -402,3 +402,32 @@ export function RebaseIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/** 日历（日期范围筛选）。 */
+export function CalendarIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="2.25" y="3.25" width="11.5" height="10.5" rx="1.5" />
+      <path d="M5.25 1.75v2.5M10.75 1.75v2.5M2.25 6.5h11.5" />
+    </Icon>
+  );
+}
+
+/** 三栏视图（三方合并冲突编辑器）。 */
+export function ColumnsThreeIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="2" y="3" width="12" height="10" rx="1.5" />
+      <path d="M6 3v10M10 3v10" />
+    </Icon>
+  );
+}
+
+/** 代码/源码模式切换。 */
+export function CodeIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M5.75 4.75 2.5 8l3.25 3.25M10.25 4.75 13.5 8l-3.25 3.25M8.75 3.5l-1.5 9" />
+    </Icon>
+  );
+}

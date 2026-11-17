@@ -57,6 +57,9 @@ vi.mock("../api/client", () => ({
   stashPush: vi.fn(),
   stashApply: vi.fn(),
   stashDrop: vi.fn(),
+  getConflictFile: vi.fn(),
+  resolveConflictFile: vi.fn(),
+  getFileBlame: vi.fn(),
   logClientError: vi.fn(async () => {}),
   getLogFilePath: vi.fn(async () => "/tmp/openpatchline.log"),
 }));
@@ -400,5 +403,128 @@ describe("useAppStore slices", () => {
     expect(mockedApi.getFileStatus).toHaveBeenCalledTimes(1);
     expect(mockedApi.getCommitGraph).toHaveBeenCalledTimes(2);
     expect(mockedApi.listBranches).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens and resolves conflict files across multiple conflicts and returns to log", async () => {
+    const store = createAppStore();
+    mockedApi.openRepository.mockResolvedValueOnce({ kind: "opened", repo: baseRepo });
+    await store.getState().openRepo("/tmp/demo");
+
+    mockedApi.getConflictFile.mockResolvedValueOnce({
+      path: "a.ts",
+      isBinary: false,
+      tooLarge: false,
+      baseExists: true,
+      oursExists: true,
+      theirsExists: true,
+      workdirExists: true,
+      baseContent: "base",
+      oursContent: "ours",
+      theirsContent: "theirs",
+      workdirContent: "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> topic\n",
+      oursLabel: "HEAD",
+      theirsLabel: "topic",
+    });
+
+    await store.getState().openConflictFile("a.ts");
+    expect(store.getState().activeView).toBe("conflict");
+    expect(store.getState().conflictDetail?.path).toBe("a.ts");
+
+    // 解决 a.ts 后还剩 b.ts，自动跳转到 b.ts
+    mockedApi.resolveConflictFile.mockResolvedValueOnce(undefined);
+    mockedApi.getFileStatus.mockResolvedValueOnce([
+      { path: "b.ts", staged: null, unstaged: null, conflicted: true },
+    ]);
+    mockedApi.getConflictFile.mockResolvedValueOnce({
+      path: "b.ts",
+      isBinary: false,
+      tooLarge: false,
+      baseExists: false,
+      oursExists: true,
+      theirsExists: true,
+      workdirExists: true,
+      baseContent: "",
+      oursContent: "b1",
+      theirsContent: "b2",
+      workdirContent: "b1",
+      oursLabel: "HEAD",
+      theirsLabel: "topic",
+    });
+    const ok1 = await store.getState().resolveConflictFile("a.ts", "ours\n", true, false);
+    expect(ok1).toBe(true);
+    expect(store.getState().activeView).toBe("conflict");
+    expect(store.getState().conflictDetail?.path).toBe("b.ts");
+
+    // 解决最后一个冲突 b.ts 后自动回到 log
+    mockedApi.resolveConflictFile.mockResolvedValueOnce(undefined);
+    mockedApi.getFileStatus.mockResolvedValueOnce([
+      { path: "b.ts", staged: "modified", unstaged: null, conflicted: false },
+    ]);
+    const ok2 = await store.getState().resolveConflictFile("b.ts", "b2\n", true, false);
+    expect(ok2).toBe(true);
+    expect(store.getState().activeView).toBe("log");
+  });
+
+  it("supports opening blame, drilling to parent commit, going back, and returning to diff", async () => {
+    const store = createAppStore();
+    mockedApi.openRepository.mockResolvedValueOnce({ kind: "opened", repo: baseRepo });
+    await store.getState().openRepo("/tmp/demo");
+
+    mockedApi.getFileDiff.mockResolvedValueOnce({
+      oldPath: "main.ts",
+      newPath: "main.ts",
+      changeType: "modified",
+      isBinary: false,
+      tooLarge: false,
+      rows: [],
+      changeRowIndices: [],
+      additions: 1,
+      deletions: 0,
+    });
+    await store
+      .getState()
+      .openFileDiff(
+        { kind: "commit", commitId: "c2" },
+        [{ path: "main.ts", oldPath: null, changeType: "modified", additions: 1, deletions: 0 }],
+        0,
+      );
+
+    mockedApi.getFileBlame.mockResolvedValueOnce({
+      path: "main.ts",
+      commitId: "c2",
+      isBinary: false,
+      tooLarge: false,
+      commits: {},
+      lines: [],
+    });
+    await store.getState().openFileBlame("main.ts", "c2", { returnView: "diff" });
+    expect(store.getState().activeView).toBe("blame");
+    expect(store.getState().blameResult?.commitId).toBe("c2");
+
+    mockedApi.getFileBlame.mockResolvedValueOnce({
+      path: "main.ts",
+      commitId: "c1",
+      isBinary: false,
+      tooLarge: false,
+      commits: {},
+      lines: [],
+    });
+    await store.getState().openFileBlame("main.ts", "c1", { pushHistory: true });
+    expect(store.getState().blameHistory).toEqual([{ path: "main.ts", commitId: "c2" }]);
+
+    mockedApi.getFileBlame.mockResolvedValueOnce({
+      path: "main.ts",
+      commitId: "c2",
+      isBinary: false,
+      tooLarge: false,
+      commits: {},
+      lines: [],
+    });
+    await store.getState().goBackBlame();
+    expect(store.getState().blameHistory).toEqual([]);
+    expect(store.getState().blameResult?.commitId).toBe("c2");
+
+    store.getState().closeBlame();
+    expect(store.getState().activeView).toBe("diff");
   });
 });

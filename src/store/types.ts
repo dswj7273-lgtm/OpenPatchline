@@ -12,9 +12,11 @@ import type {
   CommitMetadata,
   CommitSignatureInfo,
   CompareRange,
+  ConflictFileDetail,
   DiffLineSelection,
   DiffPatchAction,
   DiffScope,
+  FileBlameResult,
   FileDiffResult,
   FileStatus,
   GitProgressEvent,
@@ -28,7 +30,7 @@ import type {
 } from "../types";
 
 /** 主区域视图。 */
-export type ActiveView = "log" | "diff";
+export type ActiveView = "log" | "diff" | "conflict" | "blame";
 
 /** 主题。 */
 export type Theme = "dark" | "light";
@@ -42,6 +44,7 @@ export type GitBusy =
   | "branch"
   | "merge"
   | "conflict"
+  | "resolve"
   | "tag"
   | "cherryPick"
   | "revert"
@@ -152,6 +155,13 @@ export interface DiffSlice {
   selectedDiffFileIndex: number;
   currentFileDiff: FileDiffResult | null;
   diffLoading: boolean;
+  conflictPath: string | null;
+  conflictDetail: ConflictFileDetail | null;
+  conflictLoading: boolean;
+  blameResult: FileBlameResult | null;
+  blameLoading: boolean;
+  blameHistory: Array<{ path: string; commitId: string | null }>;
+  blameReturnView: "log" | "diff";
   openFileDiff: (scope: DiffScope, files: ChangedFile[], index: number) => Promise<void>;
   showDiffFile: (index: number) => Promise<void>;
   nextDiffFile: () => Promise<void>;
@@ -161,6 +171,20 @@ export interface DiffSlice {
     action: DiffPatchAction,
     selections: DiffLineSelection[],
   ) => Promise<boolean>;
+  openConflictFile: (path: string) => Promise<void>;
+  resolveConflictFile: (
+    path: string,
+    content: string,
+    stage: boolean,
+    deleteFile?: boolean,
+  ) => Promise<boolean>;
+  openFileBlame: (
+    path: string,
+    commitId?: string | null,
+    opts?: { pushHistory?: boolean; returnView?: "log" | "diff" },
+  ) => Promise<void>;
+  goBackBlame: () => Promise<void>;
+  closeBlame: () => void;
 }
 
 export interface WorkspaceSlice {

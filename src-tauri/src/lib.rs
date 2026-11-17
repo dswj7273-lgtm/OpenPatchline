@@ -78,7 +78,10 @@ pub fn run() {
             commands::stash_apply,
             commands::stash_drop,
             commands::log_client_error,
-            commands::get_log_file_path
+            commands::get_log_file_path,
+            commands::get_conflict_file,
+            commands::resolve_conflict_file,
+            commands::get_file_blame
         ])
         // watcher 需要 AppHandle（emit 事件），在 setup 阶段注册为全局状态。
         .setup(|app| {

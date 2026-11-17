@@ -59,6 +59,8 @@ export function DiffView() {
   const showDiffFile = useAppStore((s) => s.showDiffFile);
   const goBackToLog = useAppStore((s) => s.goBackToLog);
   const applyDiffSelection = useAppStore((s) => s.applyDiffSelection);
+  const openConflictFile = useAppStore((s) => s.openConflictFile);
+  const openFileBlame = useAppStore((s) => s.openFileBlame);
 
   const [mode, setMode] = useState<DiffMode>("split");
   const [hLinked, setHLinked] = useState(readHLinked);
@@ -255,6 +257,19 @@ export function DiffView() {
       ? `${compareRange.baseLabel} → ${compareRange.targetLabel}`
       : null;
   const patchBusy = gitBusy !== null;
+  const blameTargetPath = currentFileDiff.newPath ?? currentFileDiff.oldPath ?? activePath;
+  const canBlame =
+    !isBinary &&
+    currentFileDiff.changeType !== "deleted" &&
+    currentFileDiff.changeType !== "untracked" &&
+    currentStatus?.unstaged !== "untracked" &&
+    Boolean(blameTargetPath);
+  const blameCommitId =
+    diffScope?.kind === "commit"
+      ? diffScope.commitId
+      : diffScope?.kind === "range"
+        ? diffScope.targetRef
+        : null;
 
   return (
     <section className="diff-view" aria-label="Diff 视图">
@@ -272,8 +287,26 @@ export function DiffView() {
         onPrevFile={prevDiffFile}
         onNextFile={nextDiffFile}
         onSelectFile={showDiffFile}
+        onOpenBlame={
+          canBlame && blameTargetPath
+            ? () => void openFileBlame(blameTargetPath, blameCommitId, { returnView: "diff" })
+            : undefined
+        }
         onClose={goBackToLog}
       />
+      {currentStatus?.conflicted && activePath && (
+        <div className="diff-view__banner diff-view__banner--conflict" role="status">
+          <AlertIcon />
+          <span>当前文件存在合并冲突，可在三方合并冲突编辑器中逐块对比解决</span>
+          <button
+            type="button"
+            className="btn btn-primary diff-view__banner-cta"
+            onClick={() => void openConflictFile(activePath)}
+          >
+            打开三方合并编辑器
+          </button>
+        </div>
+      )}
       {tooLarge && (
         <div className="diff-view__banner" role="status">
           <AlertIcon />

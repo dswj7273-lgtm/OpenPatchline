@@ -441,7 +441,7 @@ fn build_file_diff(
     }
 }
 
-fn is_binary_bytes(bytes: &[u8]) -> bool {
+pub(super) fn is_binary_bytes(bytes: &[u8]) -> bool {
     bytes.iter().take(BINARY_SNIFF_LEN).any(|&b| b == 0)
 }
 

@@ -285,11 +285,24 @@
   gap: 2px;
 }
 
+.cd-file-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 6px;
+  transition: background 100ms ease;
+}
+
+.cd-file-row:hover {
+  background: var(--surface-2);
+}
+
 .cd-file {
   display: flex;
   align-items: center;
   gap: 7px;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   min-height: 28px;
   padding: 3px 6px;
   border: none;
@@ -297,11 +310,25 @@
   background: transparent;
   text-align: left;
   cursor: pointer;
-  transition: background 100ms ease;
 }
 
-.cd-file:hover {
-  background: var(--surface-2);
+.cd-file-blame {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-right: 3px;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.cd-file-row:hover .cd-file-blame,
+.cd-file-row:focus-within .cd-file-blame {
+  opacity: 1;
+}
+
+.cd-file-blame svg {
+  width: 12px;
+  height: 12px;
 }
 
 .cd-file-badge {

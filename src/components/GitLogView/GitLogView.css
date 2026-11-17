@@ -364,6 +364,93 @@
   text-align: center;
 }
 
+.gitlog-token--date {
+  max-width: 190px;
+}
+
+.gitlog-omni-date {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+}
+
+.gitlog-omni-date-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gitlog-omni-date-chip {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 100ms ease,
+    border-color 100ms ease,
+    color 100ms ease;
+}
+
+.gitlog-omni-date-chip:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.gitlog-omni-date-chip.is-clear {
+  color: var(--color-danger);
+}
+
+.gitlog-omni-date-inputs {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.gitlog-omni-date-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gitlog-omni-date-field > span {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.gitlog-omni-date-field > input {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  outline: none;
+}
+
+.gitlog-omni-date-field > input:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.gitlog-omni-date-sep {
+  padding-bottom: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 /* ---- 右侧一体化胶囊分段操作组 + Git 命令中心 ---- */
 .gitlog-actions-wrap {
   position: relative;

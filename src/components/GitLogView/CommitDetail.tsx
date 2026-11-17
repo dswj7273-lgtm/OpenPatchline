@@ -11,6 +11,7 @@ import {
   CloseIcon,
   CompareIcon,
   CopyIcon,
+  HistoryIcon,
   RebaseIcon,
   ShieldCheckIcon,
   TagIcon,
@@ -94,25 +95,48 @@ function summarizeFiles(files: ChangedFile[]): { add: number; del: number } {
   return { add, del };
 }
 
-function CommitFileRow({ file, onClick }: { file: ChangedFile; onClick: () => void }) {
+function CommitFileRow({
+  file,
+  onClick,
+  onBlame,
+}: {
+  file: ChangedFile;
+  onClick: () => void;
+  onBlame?: () => void;
+}) {
   const { dir, base } = splitPath(file.path);
+  const canBlame =
+    file.changeType !== "deleted" && file.changeType !== "binary" && Boolean(onBlame);
   return (
-    <button type="button" className={`cd-file cd-file--${file.changeType}`} onClick={onClick}>
-      <span className={`cd-file-badge badge-${file.changeType}`}>
-        {CHANGE_LETTER[file.changeType]}
-      </span>
-      <span
-        className="cd-file-path"
-        title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
-      >
-        {dir && <span className="cd-file-dir">{dir}</span>}
-        <span className="cd-file-base">{base}</span>
-      </span>
-      <span className="cd-file-stats">
-        {file.additions > 0 && <span className="cd-add">+{file.additions}</span>}
-        {file.deletions > 0 && <span className="cd-del">−{file.deletions}</span>}
-      </span>
-    </button>
+    <div className="cd-file-row">
+      <button type="button" className={`cd-file cd-file--${file.changeType}`} onClick={onClick}>
+        <span className={`cd-file-badge badge-${file.changeType}`}>
+          {CHANGE_LETTER[file.changeType]}
+        </span>
+        <span
+          className="cd-file-path"
+          title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+        >
+          {dir && <span className="cd-file-dir">{dir}</span>}
+          <span className="cd-file-base">{base}</span>
+        </span>
+        <span className="cd-file-stats">
+          {file.additions > 0 && <span className="cd-add">+{file.additions}</span>}
+          {file.deletions > 0 && <span className="cd-del">−{file.deletions}</span>}
+        </span>
+      </button>
+      {canBlame && onBlame && (
+        <button
+          type="button"
+          className="icon-btn cd-file-blame"
+          aria-label={`查看 ${file.path} 的 Blame`}
+          title="查看逐行 Blame"
+          onClick={onBlame}
+        >
+          <HistoryIcon />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -120,10 +144,12 @@ function DiffFileListSection({
   title,
   files,
   onOpenFile,
+  onBlameFile,
 }: {
   title: string;
   files: ChangedFile[];
   onOpenFile: (index: number) => void;
+  onBlameFile?: (file: ChangedFile) => void;
 }) {
   const totals = useMemo(() => summarizeFiles(files), [files]);
   return (
@@ -144,7 +170,12 @@ function DiffFileListSection({
           <p className="cd-placeholder">没有检测到文件差异</p>
         ) : (
           files.map((file, i) => (
-            <CommitFileRow key={`${file.path}:${i}`} file={file} onClick={() => onOpenFile(i)} />
+            <CommitFileRow
+              key={`${file.path}:${i}`}
+              file={file}
+              onClick={() => onOpenFile(i)}
+              onBlame={onBlameFile ? () => onBlameFile(file) : undefined}
+            />
           ))
         )}
       </div>
@@ -175,6 +206,7 @@ export function CommitDetail({ onOpenRebase }: { onOpenRebase?: () => void }) {
   const compareRange = useAppStore((s) => s.compareRange);
   const rangeFiles = useAppStore((s) => s.rangeFiles);
   const openFileDiff = useAppStore((s) => s.openFileDiff);
+  const openFileBlame = useAppStore((s) => s.openFileBlame);
   const selectCommit = useAppStore((s) => s.selectCommit);
   const swapCompareRange = useAppStore((s) => s.swapCompareRange);
   const clearCompareRange = useAppStore((s) => s.clearCompareRange);
@@ -260,6 +292,9 @@ export function CommitDetail({ onOpenRebase }: { onOpenRebase?: () => void }) {
               rangeFiles,
               i,
             )
+          }
+          onBlameFile={(file) =>
+            void openFileBlame(file.path, compareRange.targetRef, { returnView: "log" })
           }
         />
       </aside>
@@ -453,6 +488,7 @@ export function CommitDetail({ onOpenRebase }: { onOpenRebase?: () => void }) {
         title="变更文件"
         files={commitFiles}
         onOpenFile={(i) => void openFileDiff({ kind: "commit", commitId: c.id }, commitFiles, i)}
+        onBlameFile={(file) => void openFileBlame(file.path, c.id, { returnView: "log" })}
       />
     </aside>
   );

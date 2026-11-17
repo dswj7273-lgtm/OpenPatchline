@@ -20,6 +20,8 @@ const PATCH_ACTION_NOTICE: Record<DiffPatchAction, string> = {
 
 export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
   let diffReqSeq = 0;
+  let conflictReqSeq = 0;
+  let blameReqSeq = 0;
 
   return {
     activeView: "log",
@@ -28,6 +30,13 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
     selectedDiffFileIndex: 0,
     currentFileDiff: null,
     diffLoading: false,
+    conflictPath: null,
+    conflictDetail: null,
+    conflictLoading: false,
+    blameResult: null,
+    blameLoading: false,
+    blameHistory: [],
+    blameReturnView: "log",
 
     openFileDiff: async (scope, files, index) => {
       const file = files[index];
@@ -102,6 +111,8 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
 
     goBackToLog: () => {
       diffReqSeq++;
+      conflictReqSeq++;
+      blameReqSeq++;
       set({
         activeView: "log",
         diffScope: null,
@@ -109,6 +120,13 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
         selectedDiffFileIndex: 0,
         currentFileDiff: null,
         diffLoading: false,
+        conflictPath: null,
+        conflictDetail: null,
+        conflictLoading: false,
+        blameResult: null,
+        blameLoading: false,
+        blameHistory: [],
+        blameReturnView: "log",
       });
     },
 
@@ -180,6 +198,148 @@ export const createDiffSlice: AppSlice<DiffSlice> = (set, get) => {
       } finally {
         set({ gitBusy: null });
       }
+    },
+
+    openConflictFile: async (path) => {
+      const { repo } = get();
+      if (!repo) {
+        set({ error: "当前未打开仓库" });
+        return;
+      }
+      const repoId = repo.id;
+      const seq = ++conflictReqSeq;
+      set({
+        activeView: "conflict",
+        conflictPath: path,
+        conflictLoading: true,
+        error: null,
+      });
+      try {
+        const detail = await api.getConflictFile(repoId, path);
+        if (get().repo?.id !== repoId || seq !== conflictReqSeq || get().conflictPath !== path) {
+          return;
+        }
+        set({ conflictDetail: detail });
+      } catch (e) {
+        if (get().repo?.id === repoId && seq === conflictReqSeq) {
+          set({ error: reportError("openConflictFile", e) });
+        }
+      } finally {
+        if (seq === conflictReqSeq) {
+          set({ conflictLoading: false });
+        }
+      }
+    },
+
+    resolveConflictFile: async (path, content, stage, deleteFile = false) => {
+      const { repo, gitBusy } = get();
+      if (!repo) {
+        set({ error: "当前未打开仓库" });
+        return false;
+      }
+      if (gitBusy !== null) return false;
+      const repoId = repo.id;
+      set({ gitBusy: "resolve", error: null, notice: null });
+      try {
+        await api.resolveConflictFile(repoId, path, content, stage, deleteFile);
+        if (get().repo?.id !== repoId) return false;
+
+        await get().loadFileStatus();
+        if (!stage) {
+          const detail = await api.getConflictFile(repoId, path);
+          if (get().repo?.id === repoId) {
+            set({ conflictDetail: detail, notice: `已保存 ${path}（尚未标记解决）` });
+          }
+          return true;
+        }
+
+        const remainingConflicts = get().fileStatus.filter((f) => f.conflicted);
+        if (remainingConflicts.length > 0) {
+          set({ notice: `已解决并暂存 ${path}（还有 ${remainingConflicts.length} 个冲突文件）` });
+          await get().openConflictFile(remainingConflicts[0].path);
+        } else {
+          get().goBackToLog();
+          set({ notice: `已解决并暂存 ${path}，所有文件冲突已处理完毕` });
+        }
+        return true;
+      } catch (e) {
+        if (get().repo?.id === repoId) {
+          set({ error: reportError("resolveConflictFile", e) });
+        }
+        return false;
+      } finally {
+        set({ gitBusy: null });
+      }
+    },
+
+    openFileBlame: async (path, commitId = null, opts) => {
+      const { repo, blameResult, blameHistory, activeView } = get();
+      if (!repo) {
+        set({ error: "当前未打开仓库" });
+        return;
+      }
+      const repoId = repo.id;
+      const seq = ++blameReqSeq;
+      const pushHistory = opts?.pushHistory ?? false;
+      const nextHistory =
+        pushHistory && blameResult
+          ? [...blameHistory, { path: blameResult.path, commitId: blameResult.commitId }]
+          : pushHistory
+            ? blameHistory
+            : [];
+      const returnView =
+        opts?.returnView ??
+        (activeView === "blame" ? get().blameReturnView : activeView === "diff" ? "diff" : "log");
+
+      set({
+        activeView: "blame",
+        blameLoading: true,
+        blameHistory: nextHistory,
+        blameReturnView: returnView,
+        error: null,
+      });
+      try {
+        const result = await api.getFileBlame(repoId, path, commitId);
+        if (get().repo?.id !== repoId || seq !== blameReqSeq) return;
+        set({ blameResult: result });
+      } catch (e) {
+        if (get().repo?.id === repoId && seq === blameReqSeq) {
+          set({ error: reportError("openFileBlame", e) });
+          if (!get().blameResult) {
+            set({ activeView: returnView });
+          }
+        }
+      } finally {
+        if (seq === blameReqSeq) {
+          set({ blameLoading: false });
+        }
+      }
+    },
+
+    goBackBlame: async () => {
+      const { blameHistory } = get();
+      if (blameHistory.length === 0) {
+        get().closeBlame();
+        return;
+      }
+      const prev = blameHistory[blameHistory.length - 1];
+      set({ blameHistory: blameHistory.slice(0, -1) });
+      await get().openFileBlame(prev.path, prev.commitId, {
+        pushHistory: false,
+        returnView: get().blameReturnView,
+      });
+    },
+
+    closeBlame: () => {
+      blameReqSeq++;
+      const target = get().blameReturnView === "diff" && get().currentFileDiff ? "diff" : "log";
+      set({
+        activeView: target,
+        blameResult: null,
+        blameLoading: false,
+        blameHistory: [],
+        blameReturnView: "log",
+      });
     },
   };
 };

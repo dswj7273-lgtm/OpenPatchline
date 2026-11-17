@@ -35,10 +35,11 @@ use crate::logger;
 use crate::recent_repos;
 use crate::repo_manager::{RepoManager, lock_entry};
 use crate::types::{
-    BranchInfo, ChangedFile, CommitMetadata, CommitSignatureInfo, DiffLineSelection,
-    DiffPatchAction, DiffScope, DiffScopeKind, FetchResult, FileDiffResult, FileStatus,
-    GitActionResult, GitProgressEvent, GraphPage, LogFilter, OpenRepositoryOutcome, PullResult,
-    PushResult, RebaseCommitEntry, RebasePlanEntry, RecentRepo, RepoInfo, StashEntry,
+    BranchInfo, ChangedFile, CommitMetadata, CommitSignatureInfo, ConflictFileDetail,
+    DiffLineSelection, DiffPatchAction, DiffScope, DiffScopeKind, FetchResult, FileBlameResult,
+    FileDiffResult, FileStatus, GitActionResult, GitProgressEvent, GraphPage, LogFilter,
+    OpenRepositoryOutcome, PullResult, PushResult, RebaseCommitEntry, RebasePlanEntry, RecentRepo,
+    RepoInfo, StashEntry,
 };
 use crate::watcher::RepoWatcher;
 
@@ -1005,4 +1006,71 @@ pub async fn log_client_error(
 pub async fn get_log_file_path(app: tauri::AppHandle) -> AppResult<String> {
     let file = logger::log_file(&app)?;
     Ok(file.to_string_lossy().into_owned())
+}
+
+/// 读取冲突文件的三方（Base / Ours / Theirs）与当前工作区快照。
+#[tauri::command]
+pub async fn get_conflict_file(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    path: String,
+) -> AppResult<ConflictFileDetail> {
+    if path.trim().is_empty() {
+        return Err(AppError::InvalidArg("path 不能为空".to_string()));
+    }
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<ConflictFileDetail> {
+        let entry = lock_entry(&entry);
+        git_service::get_conflict_file(&entry.repo, &path)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 写入冲突解决结果并按需暂存（标记已解决）。
+#[tauri::command]
+pub async fn resolve_conflict_file(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    path: String,
+    content: String,
+    stage: bool,
+    delete_file: Option<bool>,
+) -> AppResult<()> {
+    if path.trim().is_empty() {
+        return Err(AppError::InvalidArg("path 不能为空".to_string()));
+    }
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+        let mut entry = lock_entry(&entry);
+        git_service::resolve_conflict_file(
+            &mut entry.repo,
+            &path,
+            &content,
+            stage,
+            delete_file.unwrap_or(false),
+        )
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 计算指定文件在给定提交或工作区下的逐行 Blame。
+#[tauri::command]
+pub async fn get_file_blame(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    path: String,
+    commit_id: Option<String>,
+) -> AppResult<FileBlameResult> {
+    if path.trim().is_empty() {
+        return Err(AppError::InvalidArg("path 不能为空".to_string()));
+    }
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<FileBlameResult> {
+        let entry = lock_entry(&entry);
+        git_service::file_blame(&entry.repo, &path, commit_id.as_deref())
+    })
+    .await
+    .map_err(join_error)?
 }

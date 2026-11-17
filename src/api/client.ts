@@ -11,10 +11,12 @@ import type {
   ChangedFile,
   CommitMetadata,
   CommitSignatureInfo,
+  ConflictFileDetail,
   DiffLineSelection,
   DiffPatchAction,
   DiffScope,
   FetchResult,
+  FileBlameResult,
   FileDiffResult,
   FileStatus,
   GitActionResult,
@@ -301,4 +303,29 @@ export function logClientError(level: string, source: string, message: string): 
 /** 获取本地日志文件路径。 */
 export function getLogFilePath(): Promise<string> {
   return invoke<string>("get_log_file_path");
+}
+
+/** 读取冲突文件的三方内容与当前工作区快照。 */
+export function getConflictFile(repoId: string, path: string): Promise<ConflictFileDetail> {
+  return invoke<ConflictFileDetail>("get_conflict_file", { repoId, path });
+}
+
+/** 写入冲突解决结果并按需标记为已解决（暂存）。 */
+export function resolveConflictFile(
+  repoId: string,
+  path: string,
+  content: string,
+  stage: boolean,
+  deleteFile = false,
+): Promise<void> {
+  return invoke<void>("resolve_conflict_file", { repoId, path, content, stage, deleteFile });
+}
+
+/** 计算指定文件在给定提交或工作区下的逐行 Blame。 */
+export function getFileBlame(
+  repoId: string,
+  path: string,
+  commitId: string | null = null,
+): Promise<FileBlameResult> {
+  return invoke<FileBlameResult>("get_file_blame", { repoId, path, commitId });
 }

@@ -8,6 +8,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { BlameView } from "./components/BlameView/BlameView";
+import { ConflictView } from "./components/ConflictView/ConflictView";
 import * as DiffViewModule from "./components/DiffView/DiffView";
 import { GitLogView } from "./components/GitLogView/GitLogView";
 import {
@@ -604,9 +606,15 @@ export default function App() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const state = useAppStore.getState();
-      if (e.key === "Escape" && !state.repoCandidates && state.activeView === "diff") {
-        goBackToLog();
-        return;
+      if (e.key === "Escape" && !state.repoCandidates) {
+        if (state.activeView === "diff") {
+          goBackToLog();
+          return;
+        }
+        if (state.activeView === "blame") {
+          state.closeBlame();
+          return;
+        }
       }
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
@@ -706,7 +714,17 @@ export default function App() {
       <NoticeStrip />
       <div className="app-body">
         <Sidebar />
-        <main className="app-main">{activeView === "diff" ? <DiffView /> : <GitLogView />}</main>
+        <main className="app-main">
+          {activeView === "diff" ? (
+            <DiffView />
+          ) : activeView === "conflict" ? (
+            <ConflictView />
+          ) : activeView === "blame" ? (
+            <BlameView />
+          ) : (
+            <GitLogView />
+          )}
+        </main>
       </div>
       <RepoCandidateModal />
     </div>

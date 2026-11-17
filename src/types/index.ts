@@ -332,3 +332,51 @@ export interface GitProgressEvent {
 
 /** reset_head 模式。 */
 export type ResetMode = "soft" | "mixed" | "hard";
+
+/** 冲突文件的三方内容与当前工作区快照（用于三方合并冲突编辑器）。 */
+export interface ConflictFileDetail {
+  path: string;
+  isBinary: boolean;
+  tooLarge: boolean;
+  baseExists: boolean;
+  oursExists: boolean;
+  theirsExists: boolean;
+  workdirExists: boolean;
+  baseContent: string;
+  oursContent: string;
+  theirsContent: string;
+  workdirContent: string;
+  oursLabel: string;
+  theirsLabel: string;
+}
+
+/** Blame 中关联的单个提交元信息（按 commitId 去重存储）。 */
+export interface BlameCommitInfo {
+  id: string;
+  shortId: string;
+  authorName: string;
+  authorEmail: string;
+  timestamp: number;
+  summary: string;
+  parentIds: string[];
+  isUncommitted: boolean;
+}
+
+/** 文件单行的 Blame 归属信息。 */
+export interface BlameLine {
+  lineNo: number;
+  origLineNo: number;
+  origPath: string | null;
+  commitId: string;
+  content: string;
+}
+
+/** 单文件 Blame 查询结果。 */
+export interface FileBlameResult {
+  path: string;
+  commitId: string | null;
+  isBinary: boolean;
+  tooLarge: boolean;
+  commits: Record<string, BlameCommitInfo>;
+  lines: BlameLine[];
+}

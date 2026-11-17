@@ -17,7 +17,7 @@ import "./CommitTable.css";
 const LOAD_MORE_THRESHOLD = 600;
 
 /** 相对时间（docs §3.2：Date 列，如 “3 小时前”）。 */
-function formatRelative(tsSec: number): string {
+export function formatRelative(tsSec: number): string {
   const diffSec = Math.floor(Date.now() / 1000) - tsSec;
   if (diffSec < 60) return "刚刚";
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`;

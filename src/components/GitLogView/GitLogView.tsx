@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BranchIcon,
+  CalendarIcon,
   CheckIcon,
   CherryPickIcon,
   ChevronDownIcon,
@@ -36,8 +37,42 @@ import "./GitLogView.css";
 const FILTER_DEBOUNCE_MS = 300;
 const SEARCH_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘F" : "Ctrl F";
 
-type PopoverTab = "author" | "branch";
+type PopoverTab = "author" | "branch" | "date";
 type CommandTab = "sync" | "branch" | "stash" | "reset";
+
+function formatLocalDateInput(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function unixToDateInput(ts: number | null): string {
+  if (ts === null) return "";
+  return formatLocalDateInput(new Date(ts * 1000));
+}
+
+function dateInputToUnix(value: string, boundary: "start" | "end"): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parts = trimmed.split("-").map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+  const [y, m, d] = parts;
+  const dt =
+    boundary === "start"
+      ? new Date(y, m - 1, d, 0, 0, 0, 0)
+      : new Date(y, m - 1, d, 23, 59, 59, 999);
+  if (Number.isNaN(dt.getTime())) return null;
+  return Math.floor(dt.getTime() / 1000);
+}
+
+function formatDatePill(sinceDate: string, untilDate: string): string {
+  if (sinceDate && untilDate) {
+    return sinceDate === untilDate ? sinceDate : `${sinceDate} ~ ${untilDate}`;
+  }
+  if (sinceDate) return `${sinceDate} 起`;
+  return `截至 ${untilDate}`;
+}
 
 interface SuggestionItem {
   value: string;
@@ -596,6 +631,8 @@ export function GitLogView() {
   const [search, setSearch] = useState("");
   const [author, setAuthor] = useState("");
   const [branch, setBranch] = useState("");
+  const [sinceDate, setSinceDate] = useState(() => unixToDateInput(logFilter.since));
+  const [untilDate, setUntilDate] = useState(() => unixToDateInput(logFilter.until));
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [popoverTab, setPopoverTab] = useState<PopoverTab>("branch");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -613,6 +650,13 @@ export function GitLogView() {
     setBranch(filterBranch);
   }, [filterBranch]);
 
+  const filterSince = logFilter.since;
+  const filterUntil = logFilter.until;
+  useEffect(() => {
+    setSinceDate(unixToDateInput(filterSince));
+    setUntilDate(unixToDateInput(filterUntil));
+  }, [filterSince, filterUntil]);
+
   const isPrefixCommand = search.startsWith("@") || search.startsWith("#");
   const filterRef = useRef(logFilter);
   filterRef.current = logFilter;
@@ -622,12 +666,25 @@ export function GitLogView() {
       const query = isPrefixCommand ? null : search.trim() || null;
       const authorName = author.trim() || null;
       const branchName = branch.trim() || null;
+      let since = dateInputToUnix(sinceDate, "start");
+      let until = dateInputToUnix(untilDate, "end");
+      if (since !== null && until !== null && since > until) {
+        [since, until] = [until, since];
+      }
       const cur = filterRef.current;
-      if (cur.query === query && cur.author === authorName && cur.branch === branchName) return;
-      setLogFilter({ ...cur, query, author: authorName, branch: branchName });
+      if (
+        cur.query === query &&
+        cur.author === authorName &&
+        cur.branch === branchName &&
+        cur.since === since &&
+        cur.until === until
+      ) {
+        return;
+      }
+      setLogFilter({ ...cur, query, author: authorName, branch: branchName, since, until });
     }, FILTER_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [search, author, branch, isPrefixCommand, setLogFilter]);
+  }, [search, author, branch, sinceDate, untilDate, isPrefixCommand, setLogFilter]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -762,11 +819,34 @@ export function GitLogView() {
     setSearch("");
     setAuthor("");
     setBranch("");
+    setSinceDate("");
+    setUntilDate("");
     setPopoverOpen(false);
     searchInputRef.current?.focus();
   };
 
-  const hasAnyFilter = Boolean(search || author || branch);
+  const applyDatePreset = (daysBack: number | "month" | "clear") => {
+    if (daysBack === "clear") {
+      setSinceDate("");
+      setUntilDate("");
+      return;
+    }
+    const now = new Date();
+    const todayStr = formatLocalDateInput(now);
+    if (daysBack === "month") {
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      setSinceDate(formatLocalDateInput(monthStart));
+      setUntilDate(todayStr);
+      return;
+    }
+    const start = new Date(now);
+    start.setDate(start.getDate() - daysBack);
+    setSinceDate(formatLocalDateInput(start));
+    setUntilDate(todayStr);
+  };
+
+  const hasDateFilter = Boolean(sinceDate || untilDate);
+  const hasAnyFilter = Boolean(search || author || branch || hasDateFilter);
 
   return (
     <section className="gitlog" aria-label="提交历史">
@@ -822,12 +902,39 @@ export function GitLogView() {
             </span>
           )}
 
+          {hasDateFilter && (
+            <span className="gitlog-token gitlog-token--date">
+              <CalendarIcon className="gitlog-token-icon" />
+              <span
+                className="gitlog-token-text"
+                title={`日期范围: ${formatDatePill(sinceDate, untilDate)}`}
+              >
+                {formatDatePill(sinceDate, untilDate)}
+              </span>
+              <button
+                type="button"
+                className="gitlog-token-remove"
+                aria-label="移除日期过滤"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSinceDate("");
+                  setUntilDate("");
+                  searchInputRef.current?.focus();
+                }}
+              >
+                <CloseIcon />
+              </button>
+            </span>
+          )}
+
           <input
             ref={searchInputRef}
             type="search"
             className="gitlog-omnibar-input"
             placeholder={
-              author || branch ? "继续输入关键词…" : "搜索提交、哈希，或输入 @作者  #分支…"
+              author || branch || hasDateFilter
+                ? "继续输入关键词…"
+                : "搜索提交、哈希，或输入 @作者  #分支…"
             }
             aria-label="搜索提交历史"
             aria-keyshortcuts="Meta+F Control+F"
@@ -873,7 +980,11 @@ export function GitLogView() {
               }
 
               if (e.key === "Backspace" && !search) {
-                if (branch) {
+                if (hasDateFilter) {
+                  e.preventDefault();
+                  setSinceDate("");
+                  setUntilDate("");
+                } else if (branch) {
                   e.preventDefault();
                   setBranch("");
                 } else if (author) {
@@ -908,6 +1019,15 @@ export function GitLogView() {
               onClick={() => togglePopoverTab("branch")}
             >
               <BranchIcon />
+            </button>
+            <button
+              type="button"
+              className={`gitlog-omni-tool${popoverOpen && popoverTab === "date" ? " is-active" : ""}${hasDateFilter ? " is-applied" : ""}`}
+              aria-label="按日期范围筛选"
+              title="按日期范围筛选"
+              onClick={() => togglePopoverTab("date")}
+            >
+              <CalendarIcon />
             </button>
 
             {hasAnyFilter ? (
@@ -959,35 +1079,115 @@ export function GitLogView() {
                   <span>分支</span>
                   <kbd>#</kbd>
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={popoverTab === "date"}
+                  className={`gitlog-omni-tab${popoverTab === "date" ? " is-active" : ""}`}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setPopoverTab("date")}
+                >
+                  <CalendarIcon />
+                  <span>日期</span>
+                </button>
               </div>
-              <div className="gitlog-omni-list">
-                {activeList.length > 0 ? (
-                  activeList.map((item, idx) => {
-                    const selected = (popoverTab === "author" ? author : branch) === item.value;
-                    const active = idx === activeIndex;
-                    return (
+              {popoverTab === "date" ? (
+                <div className="gitlog-omni-date" role="group" aria-label="按日期范围筛选">
+                  <div className="gitlog-omni-date-presets">
+                    <button
+                      type="button"
+                      className="gitlog-omni-date-chip"
+                      onClick={() => applyDatePreset(0)}
+                    >
+                      今天
+                    </button>
+                    <button
+                      type="button"
+                      className="gitlog-omni-date-chip"
+                      onClick={() => applyDatePreset(6)}
+                    >
+                      最近 7 天
+                    </button>
+                    <button
+                      type="button"
+                      className="gitlog-omni-date-chip"
+                      onClick={() => applyDatePreset(29)}
+                    >
+                      最近 30 天
+                    </button>
+                    <button
+                      type="button"
+                      className="gitlog-omni-date-chip"
+                      onClick={() => applyDatePreset("month")}
+                    >
+                      本月
+                    </button>
+                    {hasDateFilter && (
                       <button
-                        key={item.value}
                         type="button"
-                        role="option"
-                        aria-selected={selected}
-                        className={`gitlog-omni-option${active ? " is-active" : ""}${selected ? " is-selected" : ""}`}
-                        onMouseEnter={() => setActiveIndex(idx)}
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => selectSuggestion(item)}
+                        className="gitlog-omni-date-chip is-clear"
+                        onClick={() => applyDatePreset("clear")}
                       >
-                        <span className="gitlog-omni-option-label">{item.label}</span>
-                        {item.meta && <span className="gitlog-omni-option-meta">{item.meta}</span>}
-                        {selected && <CheckIcon className="gitlog-omni-option-check" />}
+                        清空
                       </button>
-                    );
-                  })
-                ) : (
-                  <div className="gitlog-omni-empty">
-                    {popoverTab === "author" ? "暂无匹配的作者" : "暂无匹配的分支"}
+                    )}
                   </div>
-                )}
-              </div>
+                  <div className="gitlog-omni-date-inputs">
+                    <label className="gitlog-omni-date-field">
+                      <span>起始日期</span>
+                      <input
+                        type="date"
+                        aria-label="起始日期"
+                        value={sinceDate}
+                        onChange={(e) => setSinceDate(e.target.value)}
+                      />
+                    </label>
+                    <span className="gitlog-omni-date-sep" aria-hidden="true">
+                      →
+                    </span>
+                    <label className="gitlog-omni-date-field">
+                      <span>结束日期</span>
+                      <input
+                        type="date"
+                        aria-label="结束日期"
+                        value={untilDate}
+                        onChange={(e) => setUntilDate(e.target.value)}
+                      />
+                    </label>
+                  </div>
+                </div>
+              ) : (
+                <div className="gitlog-omni-list">
+                  {activeList.length > 0 ? (
+                    activeList.map((item, idx) => {
+                      const selected = (popoverTab === "author" ? author : branch) === item.value;
+                      const active = idx === activeIndex;
+                      return (
+                        <button
+                          key={item.value}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          className={`gitlog-omni-option${active ? " is-active" : ""}${selected ? " is-selected" : ""}`}
+                          onMouseEnter={() => setActiveIndex(idx)}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => selectSuggestion(item)}
+                        >
+                          <span className="gitlog-omni-option-label">{item.label}</span>
+                          {item.meta && (
+                            <span className="gitlog-omni-option-meta">{item.meta}</span>
+                          )}
+                          {selected && <CheckIcon className="gitlog-omni-option-check" />}
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="gitlog-omni-empty">
+                      {popoverTab === "author" ? "暂无匹配的作者" : "暂无匹配的分支"}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

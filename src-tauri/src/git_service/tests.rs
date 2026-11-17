@@ -1526,3 +1526,116 @@ fn create_commit_blocked_during_cherry_pick_and_revert() {
         Err(AppError::InvalidArg(_))
     ));
 }
+
+#[test]
+fn conflict_detail_and_resolve_roundtrip() {
+    let (dir, mut repo) = init_repo();
+    let base_oid = commit_file(&repo, "a.txt", "line1\nbase\nline3\n", "base");
+    let base_commit = repo
+        .find_commit(git2::Oid::from_str(&base_oid).unwrap())
+        .unwrap();
+    let main_branch = repo.head().unwrap().shorthand().unwrap().to_string();
+
+    repo.branch("topic", &base_commit, false).unwrap();
+    drop(base_commit);
+    checkout_branch(&mut repo, "topic").unwrap();
+    commit_file(&repo, "a.txt", "line1\ntheirs\nline3\n", "topic edit");
+
+    checkout_branch(&mut repo, &main_branch).unwrap();
+    commit_file(&repo, "a.txt", "line1\nours\nline3\n", "main edit");
+
+    let out = std::process::Command::new("git")
+        .current_dir(dir.path())
+        .args(["merge", "topic"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "应当产生合并冲突");
+
+    let detail = get_conflict_file(&repo, "a.txt").expect("读取冲突详情失败");
+    assert!(!detail.is_binary);
+    assert!(!detail.too_large);
+    assert!(detail.base_exists);
+    assert!(detail.ours_exists);
+    assert!(detail.theirs_exists);
+    assert!(detail.workdir_exists);
+    assert_eq!(detail.base_content, "line1\nbase\nline3\n");
+    assert_eq!(detail.ours_content, "line1\nours\nline3\n");
+    assert_eq!(detail.theirs_content, "line1\ntheirs\nline3\n");
+    assert!(detail.workdir_content.contains("<<<<<<<"));
+
+    // 非冲突文件应报 NotFound
+    assert!(matches!(
+        get_conflict_file(&repo, "nonexistent.txt"),
+        Err(AppError::NotFound(_))
+    ));
+
+    // 先保存但不暂存 → 仍处于冲突状态但工作区已更新
+    resolve_conflict_file(&mut repo, "a.txt", "line1\nboth\nline3\n", false, false)
+        .expect("仅保存工作区失败");
+    let st1 = status(&repo).unwrap();
+    assert!(find_status(&st1, "a.txt").unwrap().conflicted);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "line1\nboth\nline3\n"
+    );
+
+    // 写入并暂存 → 冲突清除并进入 staged
+    resolve_conflict_file(&mut repo, "a.txt", "line1\nfinal\nline3\n", true, false)
+        .expect("解决并暂存失败");
+    let st2 = status(&repo).unwrap();
+    let entry = find_status(&st2, "a.txt").unwrap();
+    assert!(!entry.conflicted);
+    assert_eq!(entry.staged, Some(ChangeType::Modified));
+}
+
+#[test]
+fn file_blame_tracks_commits_and_uncommitted_buffer() {
+    let (dir, repo) = init_repo();
+    let c1 = commit_file(&repo, "notes.txt", "alpha\nbeta\n", "c1: initial");
+    let c2 = commit_file(
+        &repo,
+        "notes.txt",
+        "alpha\nbeta-edited\ngamma\n",
+        "c2: update",
+    );
+
+    // 历史指定提交的 blame
+    let b1 = file_blame(&repo, "notes.txt", Some(&c1)).expect("c1 blame 失败");
+    assert_eq!(b1.lines.len(), 2);
+    assert_eq!(b1.lines[0].commit_id, c1);
+    assert_eq!(b1.lines[1].commit_id, c1);
+    assert_eq!(b1.lines[0].content, "alpha");
+
+    // c2 应包含 c1（alpha）和 c2（beta-edited, gamma）
+    let b2 = file_blame(&repo, "notes.txt", Some(&c2)).expect("c2 blame 失败");
+    assert_eq!(b2.lines.len(), 3);
+    assert_eq!(b2.lines[0].commit_id, c1);
+    assert_eq!(b2.lines[1].commit_id, c2);
+    assert_eq!(b2.lines[2].commit_id, c2);
+    assert_eq!(b2.commits[&c2].parent_ids, vec![c1.clone()]);
+
+    // 工作区未提交改动应归属到 uncommitted (0000000...)
+    std::fs::write(
+        dir.path().join("notes.txt"),
+        "alpha\nbeta-edited\ngamma\ndirty\n",
+    )
+    .unwrap();
+    let bw = file_blame(&repo, "notes.txt", None).expect("workdir blame 失败");
+    assert_eq!(bw.lines.len(), 4);
+    assert_eq!(bw.lines[0].commit_id, c1);
+    assert_eq!(bw.lines[2].commit_id, c2);
+    let dirty_cid = &bw.lines[3].commit_id;
+    assert!(bw.commits[dirty_cid].is_uncommitted);
+    assert_eq!(bw.lines[3].content, "dirty");
+
+    // 未跟踪文件与越界路径拒绝
+    std::fs::write(dir.path().join("untracked.txt"), "hi\n").unwrap();
+    assert!(matches!(
+        file_blame(&repo, "untracked.txt", None),
+        Err(AppError::NotFound(_))
+    ));
+    assert!(matches!(
+        file_blame(&repo, "../secret.txt", None),
+        Err(AppError::InvalidArg(_))
+    ));
+}
