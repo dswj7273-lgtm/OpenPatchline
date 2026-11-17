@@ -6,10 +6,10 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/starcommit/OpenPatchline.git"
+    "url": "git+https://github.com/dswj7273-lgtm/OpenPatchline.git"
   },
   "bugs": {
-    "url": "https://github.com/starcommit/OpenPatchline/issues"
+    "url": "https://github.com/dswj7273-lgtm/OpenPatchline/issues"
   },
   "scripts": {
     "dev": "vite",

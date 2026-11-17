@@ -2,11 +2,11 @@
 
 开源 macOS Git 可视化客户端，以 **IntelliJ IDEA 级别的提交历史图** 和 **左右分栏 Diff** 为核心体验。
 
-![status](https://img.shields.io/badge/status-WIP-orange) ![platform](https://img.shields.io/badge/platform-macOS-blue) [![CI](https://github.com/starcommit/OpenPatchline/actions/workflows/ci.yml/badge.svg)](https://github.com/starcommit/OpenPatchline/actions/workflows/ci.yml)
+![status](https://img.shields.io/badge/status-WIP-orange) ![platform](https://img.shields.io/badge/platform-macOS-blue) [![CI](https://github.com/dswj7273-lgtm/OpenPatchline/actions/workflows/ci.yml/badge.svg)](https://github.com/dswj7273-lgtm/OpenPatchline/actions/workflows/ci.yml)
 
 ## 下载安装
 
-从 [Releases](https://github.com/starcommit/OpenPatchline/releases) 下载对应架构的 `.dmg`（Apple Silicon 选 `aarch64`，Intel 选 `x86_64`），拖入 Applications 即可。
+从 [Releases](https://github.com/dswj7273-lgtm/OpenPatchline/releases) 下载对应架构的 `.dmg`（Apple Silicon 选 `aarch64`，Intel 选 `x86_64`），拖入 Applications 即可。
 
 > 当前构建未做 Apple 开发者签名/公证。首次打开若被 Gatekeeper 拦截，请前往 **系统设置 → 隐私与安全性** 点击 **仍要打开**，或在终端执行：
 >
