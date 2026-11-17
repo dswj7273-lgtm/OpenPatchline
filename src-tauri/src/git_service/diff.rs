@@ -120,7 +120,14 @@ pub fn file_diff_commit(
         .tree()
         .map_err(|e| AppError::Git(format!("读取提交树失败: {e}")))?;
     let parent_tree = first_parent_tree(&commit)?;
-    file_diff_between_trees(repo, parent_tree.as_ref(), Some(&new_tree), path, "该提交", ignore_ws)
+    file_diff_between_trees(
+        repo,
+        parent_tree.as_ref(),
+        Some(&new_tree),
+        path,
+        "该提交",
+        ignore_ws,
+    )
 }
 
 /// 两个提交或引用之间单个文件的左右分栏 diff（`base_ref` → `target_ref`）。
@@ -165,7 +172,14 @@ fn file_diff_between_trees(
         blob_bytes_from_tree(repo, new_tree, new_path.as_deref().unwrap_or(path))?
     };
     let change_type = delta_change_type(status).unwrap_or(ChangeType::Modified);
-    Ok(build_file_diff(old, new, old_path, new_path, change_type, ignore_ws))
+    Ok(build_file_diff(
+        old,
+        new,
+        old_path,
+        new_path,
+        change_type,
+        ignore_ws,
+    ))
 }
 
 /// 暂存区中单个文件的 diff：HEAD blob vs index blob。
@@ -205,7 +219,14 @@ pub fn file_diff_staged(
         blob_bytes_from_index(repo, &index, new_path.as_deref().unwrap_or(path))?
     };
     let change_type = delta_change_type(status).unwrap_or(ChangeType::Modified);
-    Ok(build_file_diff(old, new, old_path, new_path, change_type, ignore_ws))
+    Ok(build_file_diff(
+        old,
+        new,
+        old_path,
+        new_path,
+        change_type,
+        ignore_ws,
+    ))
 }
 
 /// 工作区中单个文件的 diff：index blob（不在 index 则取 HEAD）vs 工作区文件字节。
@@ -270,7 +291,14 @@ pub fn file_diff_workdir(
             _ => ChangeType::Modified,
         },
     };
-    Ok(build_file_diff(old, new, old_path, new_path, change_type, ignore_ws))
+    Ok(build_file_diff(
+        old,
+        new,
+        old_path,
+        new_path,
+        change_type,
+        ignore_ws,
+    ))
 }
 
 fn first_parent_tree<'r>(commit: &git2::Commit<'r>) -> AppResult<Option<git2::Tree<'r>>> {
@@ -529,10 +557,13 @@ pub fn changed_files_stash(repo: &git2::Repository, index: u32) -> AppResult<Vec
         Some(&stash_tree),
         &format!("stash@{{{index}}}"),
     )?;
+    // 未跟踪树对**空树** diff（等价 `git stash show -u` 的口径）：第三父
+    // 提交的树只含未跟踪文件，若对基准树 diff，所有跟踪文件都会被当成
+    // 删除混进预览。
     if let Some(untracked_tree) = stash_untracked_tree(repo, &stash)? {
         let extra = changed_files_between_trees(
             repo,
-            Some(&base_tree),
+            None,
             Some(&untracked_tree),
             &format!("stash@{{{index}}} 未跟踪文件"),
         )?;

@@ -168,7 +168,10 @@ mod tests {
         assert_eq!(loaded.code_font_size, FONT_SIZE_MAX);
         assert_eq!(loaded.tab_width, TAB_WIDTH_MIN);
         assert_eq!(loaded.external_editor_command, None);
-        assert_eq!(loaded.git_executable_path.as_deref(), Some("/usr/local/bin/git"));
+        assert_eq!(
+            loaded.git_executable_path.as_deref(),
+            Some("/usr/local/bin/git")
+        );
     }
 
     #[test]

@@ -462,7 +462,9 @@ pub fn generate_file_patch(
     if loaded.old_bytes.as_deref().is_some_and(is_binary_bytes)
         || loaded.new_bytes.as_deref().is_some_and(is_binary_bytes)
     {
-        return Err(AppError::InvalidArg("二进制文件不支持生成文本补丁".to_string()));
+        return Err(AppError::InvalidArg(
+            "二进制文件不支持生成文本补丁".to_string(),
+        ));
     }
     let mode = index_mode_or_default(&workdir, &index, path);
     let patch = build_unified_patch_for_file(
@@ -472,7 +474,9 @@ pub fn generate_file_patch(
         mode,
     )?;
     if patch.is_empty() {
-        return Err(AppError::NotFound(format!("文件 {path} 当前没有可生成的变更补丁")));
+        return Err(AppError::NotFound(format!(
+            "文件 {path} 当前没有可生成的变更补丁"
+        )));
     }
     String::from_utf8(patch)
         .map_err(|e| AppError::Unexpected(format!("补丁文本不是有效 UTF-8: {e}")))

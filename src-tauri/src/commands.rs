@@ -1125,10 +1125,7 @@ pub async fn get_app_config(app: tauri::AppHandle) -> AppResult<AppConfigPayload
 /// 保存应用设置：规整取值后原子写入，并即时应用 git 可执行路径覆盖；
 /// 返回落盘后的最终配置（供前端回显规整结果）。
 #[tauri::command]
-pub async fn set_app_config(
-    app: tauri::AppHandle,
-    config: AppConfig,
-) -> AppResult<AppConfig> {
+pub async fn set_app_config(app: tauri::AppHandle, config: AppConfig) -> AppResult<AppConfig> {
     tauri::async_runtime::spawn_blocking(move || -> AppResult<AppConfig> {
         let config = config.normalized();
         let file = app_config::app_config_file(&app)?;
