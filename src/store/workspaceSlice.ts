@@ -75,6 +75,7 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
     branches: [],
     branchesLoading: false,
     stashes: [],
+    safetyBackups: [],
     commitMetadata: null,
     commitHistory: [],
     gitBusy: null,
@@ -225,6 +226,13 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
         const branches = await api.listBranches(repoId);
         if (get().repo?.id === repoId && seq === branchesReqSeq) {
           set({ branches });
+          // 顺带刷新危险操作备份引用（v0.8 / 8.5 撤销入口；失败静默）。
+          void api
+            .listSafetyBackups(repoId)
+            .then((backups) => {
+              if (get().repo?.id === repoId) set({ safetyBackups: backups });
+            })
+            .catch(() => {});
         }
       } catch (e) {
         if (get().repo?.id === repoId && seq === branchesReqSeq) {

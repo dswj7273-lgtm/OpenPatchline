@@ -30,6 +30,7 @@ import type {
   RebaseCommitEntry,
   RebasePlanEntry,
   RecentRepo,
+  SafetyBackup,
   RepoInfo,
   ResetMode,
   StashEntry,
@@ -170,17 +171,8 @@ export function interactiveRebase(
 }
 
 /** 列出危险操作备份引用（撤销入口数据源，v0.8 / 8.5）。 */
-export function listSafetyBackups(repoId: string): Promise<
-  Array<{
-    refName: string;
-    fullRef: string;
-    commitId: string;
-    shortId: string;
-    summary: string;
-    timestamp: number;
-  }>
-> {
-  return invoke("list_safety_backups", { repoId });
+export function listSafetyBackups(repoId: string): Promise<SafetyBackup[]> {
+  return invoke<SafetyBackup[]>("list_safety_backups", { repoId });
 }
 
 /** 组装诊断信息文本（v0.8 / 8.7）。 */

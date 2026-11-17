@@ -21,6 +21,7 @@ import {
   SettingsIcon,
   SunIcon,
   TerminalIcon,
+  UndoIcon,
 } from "../Icons";
 import { refreshRepoState } from "../../keyboard/appActions";
 import { fuzzyMatchAny } from "../../keyboard/fuzzyMatch";
@@ -110,6 +111,20 @@ function buildCommands(): CommandItem[] {
     );
     remote("整理最近提交（轻量 Rebase）", "rebase rewrite 整理", () => s.openRebaseModal());
 
+    // —— 危险操作撤销（v0.8 / 8.5）：恢复到备份引用，本身也是改写操作 → danger ——
+    for (const backup of s.safetyBackups.slice(0, 4)) {
+      items.push({
+        id: `undo-${backup.refName}`,
+        title: `恢复危险操作前状态（${backup.refName} · ${backup.shortId} ${backup.summary}）`,
+        group: "Git 操作",
+        detail: "reset --hard 到备份引用",
+        keywords: `undo backup restore 撤销 恢复 备份 ${backup.refName}`,
+        danger: true,
+        icon: <UndoIcon />,
+        run: () => void s.resetHead(backup.fullRef, "hard"),
+      });
+    }
+
     // —— 分支切换 ——
     for (const b of s.branches) {
       if (b.isCurrent) continue;
@@ -155,6 +170,7 @@ export function CommandPalette() {
   const open = useAppStore((s) => s.commandPaletteOpen);
   const closeCommandPalette = useAppStore((s) => s.closeCommandPalette);
   const branchesVersion = useAppStore((s) => s.branches);
+  const backupsVersion = useAppStore((s) => s.safetyBackups);
   const reposVersion = useAppStore((s) => s.recentRepos);
   const repo = useAppStore((s) => s.repo);
   const [query, setQuery] = useState("");
@@ -166,7 +182,7 @@ export function CommandPalette() {
   const commands = useMemo(
     () => (open ? buildCommands() : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [open, repo?.id, branchesVersion, reposVersion],
+    [open, repo?.id, branchesVersion, reposVersion, backupsVersion],
   );
 
   const filtered = useMemo(() => {

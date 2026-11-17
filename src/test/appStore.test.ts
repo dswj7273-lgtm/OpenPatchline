@@ -61,6 +61,7 @@ vi.mock("../api/client", () => ({
   getConflictFile: vi.fn(),
   resolveConflictFile: vi.fn(),
   getFileBlame: vi.fn(),
+  listSafetyBackups: vi.fn(async () => []),
   logClientError: vi.fn(async () => {}),
   getLogFilePath: vi.fn(async () => "/tmp/openpatchline.log"),
   getAppSettings: vi.fn(async () => ({

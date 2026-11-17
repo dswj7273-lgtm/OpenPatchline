@@ -28,6 +28,7 @@ import type {
   RecentRepo,
   RepoInfo,
   ResetMode,
+  SafetyBackup,
   StashEntry,
   Theme,
   ThemePreference,
@@ -242,6 +243,8 @@ export interface WorkspaceSlice {
   branches: BranchInfo[];
   branchesLoading: boolean;
   stashes: StashEntry[];
+  /** 危险操作备份引用（v0.8 / 8.5 撤销入口，随分支列表刷新）。 */
+  safetyBackups: SafetyBackup[];
   commitMetadata: CommitMetadata | null;
   commitHistory: string[];
   gitBusy: GitBusy;

@@ -433,3 +433,14 @@ export interface FileHistoryEntry {
   /** 重命名来源路径；仅 changeType === "renamed" 时非空。 */
   oldPath: string | null;
 }
+
+/** 危险操作备份引用条目（v0.8 / 8.5 撤销入口）。 */
+export interface SafetyBackup {
+  /** 短引用名（refs/opl-backup/ 之后的部分）。 */
+  refName: string;
+  fullRef: string;
+  commitId: string;
+  shortId: string;
+  summary: string;
+  timestamp: number;
+}
