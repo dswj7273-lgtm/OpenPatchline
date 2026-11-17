@@ -1128,3 +1128,74 @@ pub async fn set_app_config(
     .await
     .map_err(join_error)?
 }
+
+/// 在 Finder 中定位仓库内文件（右键菜单 / docs/11 §三 6.7）。
+#[tauri::command]
+pub async fn reveal_path_in_finder(
+    app: tauri::AppHandle,
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    path: String,
+) -> AppResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+        let entry = lock_entry(&entry);
+        let workdir = entry
+            .repo
+            .workdir()
+            .ok_or_else(|| AppError::InvalidArg("bare 仓库没有工作区".to_string()))?;
+        let abs = crate::git_service::resolve_workdir_path(workdir, &path)?;
+        app.opener()
+            .reveal_item_in_dir(abs)
+            .map_err(|e| AppError::Io(format!("在 Finder 中定位失败: {e}")))
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 用设置中配置的外部编辑器打开文件（可选跳转到行号）。
+#[tauri::command]
+pub async fn open_file_in_editor(
+    app: tauri::AppHandle,
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    path: String,
+    line: Option<u32>,
+) -> AppResult<()> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+        let file = app_config::app_config_file(&app)?;
+        let (config, _) = app_config::load_app_config(&file)?;
+        let template = config.external_editor_command.ok_or_else(|| {
+            AppError::InvalidArg("尚未配置外部编辑器命令，请先在设置中填写".to_string())
+        })?;
+        let entry = lock_entry(&entry);
+        let workdir = entry
+            .repo
+            .workdir()
+            .ok_or_else(|| AppError::InvalidArg("bare 仓库没有工作区".to_string()))?;
+        let abs = crate::git_service::resolve_workdir_path(workdir, &path)?;
+        let args = crate::external::build_editor_args(&template, &abs.to_string_lossy(), line)?;
+        crate::external::spawn_detached(&args, workdir)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// 生成工作区 / 暂存区单文件的 unified patch 文本（复制补丁用）。
+#[tauri::command]
+pub async fn generate_file_patch(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    scope: DiffScope,
+    path: String,
+) -> AppResult<String> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<String> {
+        let entry = lock_entry(&entry);
+        git_service::generate_file_patch(&entry.repo, &scope, &path)
+    })
+    .await
+    .map_err(join_error)?
+}

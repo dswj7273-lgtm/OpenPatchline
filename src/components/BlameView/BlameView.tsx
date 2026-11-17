@@ -14,6 +14,9 @@ import {
   requestHighlight,
 } from "../../highlighter/workerClient";
 import { useAppStore } from "../../store/app";
+import { useContextMenu, type ContextMenuItem } from "../ContextMenu/ContextMenu";
+import { openFileContextMenu } from "../../utils/fileContextMenu";
+import { copyText } from "../../utils/clipboard";
 import type { BlameCommitInfo, BlameLine } from "../../types";
 import { CodeContent } from "../DiffView/CodeCell";
 import { formatAbsolute, formatRelative } from "../GitLogView/CommitTable";
@@ -54,6 +57,7 @@ function computeCommitAges(commits: Record<string, BlameCommitInfo>): Map<string
 
 export function BlameView() {
   const ROW_HEIGHT = useAppStore((s) => s.codeRowHeight);
+  const lineMenu = useContextMenu();
   const blameResult = useAppStore((s) => s.blameResult);
   const blameLoading = useAppStore((s) => s.blameLoading);
   const blameHistory = useAppStore((s) => s.blameHistory);
@@ -339,6 +343,27 @@ export function BlameView() {
                       key={line.lineNo}
                       className={`blame-row${isHunkStart ? " is-hunk-start" : ""}${isActive ? " is-active" : ""}${commit?.isUncommitted ? " is-uncommitted" : ""}`}
                       style={{ height: ROW_HEIGHT }}
+                      onContextMenu={(e) => {
+                        const st = useAppStore.getState();
+                        if (!st.repo) return;
+                        const extra: ContextMenuItem[] = [
+                          {
+                            key: "copy-line",
+                            label: "复制此行内容",
+                            onSelect: () => {
+                              if (!copyText(line.content)) {
+                                useAppStore.setState({ error: "复制失败：剪贴板不可用" });
+                              }
+                            },
+                          },
+                        ];
+                        openFileContextMenu(lineMenu.open, e, {
+                          repoId: st.repo.id,
+                          path: blameResult.path,
+                          line: line.lineNo,
+                          extra,
+                        });
+                      }}
                     >
                       <button
                         type="button"
@@ -384,6 +409,7 @@ export function BlameView() {
           </div>
         )}
       </div>
+      {lineMenu.render()}
     </section>
   );
 }

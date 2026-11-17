@@ -1651,3 +1651,32 @@ fn file_blame_tracks_commits_and_uncommitted_buffer() {
         Err(AppError::InvalidArg(_))
     ));
 }
+
+#[test]
+fn generate_patch_for_workdir_and_staged() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    let _c1 = commit_file(&repo, "a.txt", "one\ntwo\nthree\n", "init");
+
+    // 工作区修改 two -> TWO
+    std::fs::write(dir.path().join("a.txt"), "one\nTWO\nthree\n").unwrap();
+    let patch = generate_file_patch(&repo, &workdir_scope(), "a.txt").expect("生成补丁失败");
+    assert!(patch.contains("diff --git a/a.txt b/a.txt"));
+    assert!(patch.contains("-two"));
+    assert!(patch.contains("+TWO"));
+
+    // 无变更 → NotFound
+    std::fs::write(dir.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    assert!(matches!(
+        generate_file_patch(&repo, &workdir_scope(), "a.txt"),
+        Err(AppError::NotFound(_))
+    ));
+
+    // 暂存后 staged 范围可生成
+    std::fs::write(dir.path().join("a.txt"), "one\nTWO2\nthree\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("a.txt")).unwrap();
+    index.write().unwrap();
+    let staged = generate_file_patch(&repo, &staged_scope(), "a.txt").expect("staged 补丁失败");
+    assert!(staged.contains("+TWO2"));
+}

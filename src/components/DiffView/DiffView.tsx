@@ -18,7 +18,12 @@ import { matchesKeyId } from "../../keyboard/keymap";
 import { buildFoldLayout, computeFoldRanges, type FoldLayout } from "./foldUtils";
 import { useAppStore } from "../../store/app";
 import type { AlignedRow, DiffLineSelection, DiffPatchAction } from "../../types";
+import { useContextMenu } from "../ContextMenu/ContextMenu";
 import { AlertIcon } from "../Icons";
+import { copyText } from "../../utils/clipboard";
+import { openFileContextMenu } from "../../utils/fileContextMenu";
+import { reportError } from "../../utils/errors";
+import * as api from "../../api/client";
 import "./DiffView.css";
 import "../../highlighter/tokens.css";
 import { keysToSelections, lineSelectionKey } from "./diffGridUtils";
@@ -79,6 +84,7 @@ export function DiffView() {
   /** 网格滚动容器与一次性恢复值（忽略空白切换时保持滚动位置）。 */
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const restoreScrollRef = useRef<number | null>(null);
+  const fileMenu = useContextMenu();
 
   const [explicitState, setExplicitState] = useState<{
     diff: object | null;
@@ -260,6 +266,72 @@ export function DiffView() {
     void setDiffIgnoreWhitespace(!ignoreWhitespace);
   }, [ignoreWhitespace, setDiffIgnoreWhitespace]);
 
+  /** 复制选中的 diff 片段（按选区键生成 +/- 前缀行，docs/11 §三 6.8）。 */
+  const onCopySelectionSnippet = useCallback(() => {
+    const diff = useAppStore.getState().currentFileDiff;
+    if (!diff || highlightedKeys.size === 0) return;
+    const lines: string[] = [];
+    for (let i = 0; i < diff.rows.length; i++) {
+      const row = diff.rows[i];
+      if (row.left?.kind === "removed" && highlightedKeys.has(lineSelectionKey(i, "old"))) {
+        lines.push(`-${row.left.content}`);
+      }
+      if (row.right?.kind === "added" && highlightedKeys.has(lineSelectionKey(i, "new"))) {
+        lines.push(`+${row.right.content}`);
+      }
+    }
+    if (lines.length === 0) return;
+    if (!copyText(lines.join("\n"))) {
+      useAppStore.setState({ error: "复制失败：剪贴板不可用" });
+    }
+  }, [highlightedKeys]);
+
+  /** 文件路径右键菜单：编辑器 / Finder / 复制路径 / 生成补丁（docs/11 §三 6.7 / 6.8）。 */
+  const onPathContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      const state = useAppStore.getState();
+      const repo = state.repo;
+      const path = state.diffFiles[state.selectedDiffFileIndex]?.path;
+      if (!repo || !path) return;
+      // 编辑器定位行：首个选中变更行，否则第一处变更。
+      const firstSel = [...highlightedKeys][0];
+      const selRow = firstSel ? Number(firstSel.slice(0, firstSel.indexOf(":"))) : NaN;
+      const firstChange = state.currentFileDiff?.changeRowIndices[0];
+      const anchorRow = Number.isInteger(selRow) ? selRow : (firstChange ?? NaN);
+      const anchor = state.currentFileDiff?.rows[anchorRow];
+      const line = anchor?.right?.lineno ?? anchor?.left?.lineno ?? null;
+      const canPatch = state.diffScope?.kind === "workdir" || state.diffScope?.kind === "staged";
+      openFileContextMenu(fileMenu.open, e, {
+        repoId: repo.id,
+        path,
+        line,
+        extra: canPatch
+          ? [
+              {
+                key: "copy-patch",
+                label: "生成并复制补丁（patch）",
+                onSelect: () => {
+                  void api
+                    .generateFilePatch(repo.id, state.diffScope!, path)
+                    .then((patch) => {
+                      if (!copyText(patch)) {
+                        useAppStore.setState({ error: "复制补丁失败：剪贴板不可用" });
+                      } else {
+                        useAppStore.setState({ notice: `已复制 ${path} 的补丁文本` });
+                      }
+                    })
+                    .catch((err) =>
+                      useAppStore.setState({ error: reportError("generateFilePatch", err) }),
+                    );
+                },
+              },
+            ]
+          : undefined,
+      });
+    },
+    [fileMenu, highlightedKeys],
+  );
+
   const clearSelection = useCallback(() => {
     setExplicitState({ diff: currentFileDiff, keys: new Set() });
     setDragState({ diff: currentFileDiff, keys: new Set() });
@@ -376,6 +448,7 @@ export function DiffView() {
             : undefined
         }
         onClose={goBackToLog}
+        onPathContextMenu={onPathContextMenu}
       />
       {currentStatus?.conflicted && activePath && (
         <div className="diff-view__banner diff-view__banner--conflict" role="status">
@@ -440,6 +513,13 @@ export function DiffView() {
             <button
               type="button"
               className="btn diff-selection-bar__btn"
+              onClick={onCopySelectionSnippet}
+            >
+              复制所选片段
+            </button>
+            <button
+              type="button"
+              className="btn diff-selection-bar__btn"
               disabled={patchBusy}
               onClick={clearSelection}
             >
@@ -489,6 +569,7 @@ export function DiffView() {
           />
         )}
       </div>
+      {fileMenu.render()}
     </section>
   );
 }

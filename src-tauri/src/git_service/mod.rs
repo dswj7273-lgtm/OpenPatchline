@@ -40,7 +40,7 @@ pub use diff::{
     file_diff_workdir,
 };
 pub use history::load_commit_page;
-pub use patch::apply_diff_selection;
+pub use patch::{apply_diff_selection, generate_file_patch};
 pub use rebase::{list_rebase_commits, rewrite_recent_commits};
 pub use status::{stage_file, status, unstage_file};
 

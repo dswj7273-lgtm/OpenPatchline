@@ -355,3 +355,22 @@ export function getAppSettings(): Promise<{ config: AppSettings; fresh: boolean 
 export function setAppSettings(config: AppSettings): Promise<AppSettings> {
   return invoke<AppSettings>("set_app_config", { config });
 }
+
+/** 在 Finder 中定位仓库内文件。 */
+export function revealPathInFinder(repoId: string, path: string): Promise<void> {
+  return invoke<void>("reveal_path_in_finder", { repoId, path });
+}
+
+/** 用设置中的外部编辑器打开文件（可选跳转到行号）。 */
+export function openFileInEditor(
+  repoId: string,
+  path: string,
+  line: number | null = null,
+): Promise<void> {
+  return invoke<void>("open_file_in_editor", { repoId, path, line });
+}
+
+/** 生成工作区 / 暂存区单文件的 unified patch 文本。 */
+export function generateFilePatch(repoId: string, scope: DiffScope, path: string): Promise<string> {
+  return invoke<string>("generate_file_patch", { repoId, scope, path });
+}

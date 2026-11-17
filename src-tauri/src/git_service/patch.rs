@@ -436,6 +436,48 @@ fn check_and_apply_git_patch(workdir: &Path, patch: &[u8], cached: bool) -> AppR
     Ok(())
 }
 
+/// 生成工作区 / 暂存区单文件的标准 unified patch 文本（v0.6 / 6.8 复制补丁）。
+pub fn generate_file_patch(
+    repo: &git2::Repository,
+    scope: &DiffScope,
+    path: &str,
+) -> AppResult<String> {
+    if !matches!(scope.kind, DiffScopeKind::Workdir | DiffScopeKind::Staged) {
+        return Err(AppError::InvalidArg(
+            "仅支持为工作区或暂存区变更生成补丁".to_string(),
+        ));
+    }
+    let rel = validate_rel_path(path)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| AppError::InvalidArg("bare 仓库没有工作区".to_string()))?
+        .to_path_buf();
+    let index = fresh_index(repo)?;
+    if is_conflicted_in_index(&index, rel) {
+        return Err(AppError::InvalidArg(
+            "冲突文件暂不支持生成补丁，请先解决冲突".to_string(),
+        ));
+    }
+    let loaded = load_scope_pair(repo, &workdir, &index, scope.kind, path)?;
+    if loaded.old_bytes.as_deref().is_some_and(is_binary_bytes)
+        || loaded.new_bytes.as_deref().is_some_and(is_binary_bytes)
+    {
+        return Err(AppError::InvalidArg("二进制文件不支持生成文本补丁".to_string()));
+    }
+    let mode = index_mode_or_default(&workdir, &index, path);
+    let patch = build_unified_patch_for_file(
+        loaded.old_bytes.as_deref(),
+        loaded.new_bytes.as_deref(),
+        path,
+        mode,
+    )?;
+    if patch.is_empty() {
+        return Err(AppError::NotFound(format!("文件 {path} 当前没有可生成的变更补丁")));
+    }
+    String::from_utf8(patch)
+        .map_err(|e| AppError::Unexpected(format!("补丁文本不是有效 UTF-8: {e}")))
+}
+
 fn apply_stage_patch(
     workdir: &Path,
     index: &git2::Index,

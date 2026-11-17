@@ -49,6 +49,8 @@ export interface DiffHeaderProps {
   onSelectFile: (index: number) => void;
   onOpenBlame?: () => void;
   onClose: () => void;
+  /** 文件路径右键菜单（v0.6 / 6.7）。 */
+  onPathContextMenu?: (e: React.MouseEvent) => void;
 }
 
 const IS_MAC = navigator.userAgent.includes("Mac");
@@ -103,6 +105,7 @@ export default function DiffHeader({
   onSelectFile,
   onOpenBlame,
   onClose,
+  onPathContextMenu,
 }: DiffHeaderProps) {
   const { oldPath, newPath } = diff;
   const isRenamed = Boolean(oldPath && newPath && oldPath !== newPath);
@@ -138,7 +141,7 @@ export default function DiffHeader({
           </button>
         </div>
 
-        <span className="diff-header__path" title={displayPath}>
+        <span className="diff-header__path" title={displayPath} onContextMenu={onPathContextMenu}>
           {isRenamed ? (
             <span className="diff-header__path-base">{displayPath}</span>
           ) : (

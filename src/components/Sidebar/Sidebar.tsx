@@ -23,6 +23,8 @@ import {
 } from "../Icons";
 import { useAppStore } from "../../store/app";
 import type { BranchInfo, ChangedFile, ChangeType, FileStatus } from "../../types";
+import { useContextMenu } from "../ContextMenu/ContextMenu";
+import { openFileContextMenu } from "../../utils/fileContextMenu";
 import { CommitComposer } from "./CommitComposer";
 import "./Sidebar.css";
 
@@ -250,10 +252,13 @@ function FileRow({
   const { dir, base } = splitPath(entry.path);
   const canBlame =
     !isConflict && changeType !== "untracked" && changeType !== "added" && Boolean(onBlame);
+  const fileMenu = useContextMenu();
+  const repo = useAppStore((s) => s.repo);
   return (
     <div
       className={`sidebar-file sidebar-file--${isConflict ? "conflicted" : changeType}${active ? " is-active" : ""}`}
     >
+      {fileMenu.render()}
       <button
         type="button"
         className="sidebar-file-open"
@@ -261,6 +266,10 @@ function FileRow({
         title={`${entry.path}\n${label} · ${sideLabel}`}
         aria-label={`${entry.path}，${label}，${sideLabel}`}
         onClick={onOpen}
+        onContextMenu={(e) => {
+          if (!repo) return;
+          openFileContextMenu(fileMenu.open, e, { repoId: repo.id, path: entry.path });
+        }}
       >
         <span
           className={`sidebar-file-status badge-${isConflict ? "conflicted" : changeType}`}
