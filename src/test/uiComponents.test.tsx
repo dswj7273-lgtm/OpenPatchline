@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GitLogView } from "../components/GitLogView/GitLogView";
 import { CommitComposer } from "../components/Sidebar/CommitComposer";
 import { useAppStore } from "../store/app";
 
@@ -73,5 +74,41 @@ describe("CommitComposer (4.4 enhancements)", () => {
       "chore: previous message",
       true,
     );
+  });
+
+  it("consolidates log toolbar actions into one Git 操作 menu with ahead/behind/stash badges", () => {
+    useAppStore.setState({
+      branches: [
+        {
+          name: "main",
+          kind: "local",
+          isCurrent: true,
+          upstream: "origin/main",
+          ahead: 1,
+          behind: 2,
+          tipCommit: "abc1234",
+        },
+      ],
+      stashes: [{ index: 0, id: "deadbeef", message: "wip" }],
+      selectedCommitId: null,
+      compareRange: null,
+    });
+
+    render(<GitLogView />);
+
+    const actionGroup = screen.getByRole("group", { name: "Git 操作入口" });
+    const buttons = actionGroup.querySelectorAll("button");
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toHaveTextContent("Git 操作");
+    expect(buttons[0]).toHaveTextContent("↓2");
+    expect(buttons[0]).toHaveTextContent("↑1");
+
+    fireEvent.click(buttons[0]);
+    const dialog = screen.getByRole("dialog", { name: "Git 命令中心" });
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "同步" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "分支/标签" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "贮藏 (1)" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "撤销/清理" })).toBeInTheDocument();
   });
 });

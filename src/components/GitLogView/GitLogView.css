@@ -466,6 +466,7 @@
 .gitlog-seg-badge {
   display: inline-flex;
   align-items: center;
+  gap: 3px;
   height: 16px;
   padding: 0 5px;
   border-radius: 4px;
@@ -476,6 +477,11 @@
   font-weight: 650;
   line-height: 1;
   font-variant-numeric: tabular-nums;
+}
+
+.gitlog-seg-badge svg {
+  width: 10px;
+  height: 10px;
 }
 
 .gitlog-seg-badge.is-ahead {
@@ -622,6 +628,9 @@
 }
 
 .gitlog-cmd-item-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   font-weight: 550;
   color: var(--text-primary);

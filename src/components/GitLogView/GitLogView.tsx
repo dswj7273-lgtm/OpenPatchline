@@ -90,6 +90,9 @@ function GitCommandCenter({
   const [confirmDiscardAll, setConfirmDiscardAll] = useState(false);
 
   const mergeCandidates = useMemo(() => branches.filter((b) => !b.isCurrent), [branches]);
+  const currentBranch = useMemo(() => branches.find((b) => b.isCurrent) ?? null, [branches]);
+  const aheadCount = currentBranch?.ahead ?? 0;
+  const behindCount = currentBranch?.behind ?? 0;
 
   useEffect(() => {
     if (mergeCandidates.length > 0 && !mergeCandidates.some((b) => b.name === mergeTarget)) {
@@ -199,7 +202,12 @@ function GitCommandCenter({
               >
                 <PullIcon />
                 <div className="gitlog-cmd-item-copy">
-                  <span className="gitlog-cmd-item-title">合并拉取</span>
+                  <span className="gitlog-cmd-item-title">
+                    合并拉取
+                    {behindCount > 0 && (
+                      <span className="gitlog-seg-badge is-behind">↓{behindCount}</span>
+                    )}
+                  </span>
                   <span className="gitlog-cmd-item-sub">git pull --no-edit</span>
                 </div>
               </button>
@@ -211,7 +219,12 @@ function GitCommandCenter({
               >
                 <CherryPickIcon />
                 <div className="gitlog-cmd-item-copy">
-                  <span className="gitlog-cmd-item-title">变基拉取</span>
+                  <span className="gitlog-cmd-item-title">
+                    变基拉取
+                    {behindCount > 0 && (
+                      <span className="gitlog-seg-badge is-behind">↓{behindCount}</span>
+                    )}
+                  </span>
                   <span className="gitlog-cmd-item-sub">git pull --rebase --autostash</span>
                 </div>
               </button>
@@ -223,7 +236,12 @@ function GitCommandCenter({
               >
                 <PushIcon />
                 <div className="gitlog-cmd-item-copy">
-                  <span className="gitlog-cmd-item-title">推送当前分支</span>
+                  <span className="gitlog-cmd-item-title">
+                    推送当前分支
+                    {aheadCount > 0 && (
+                      <span className="gitlog-seg-badge is-ahead">↑{aheadCount}</span>
+                    )}
+                  </span>
                   <span className="gitlog-cmd-item-sub">git push</span>
                 </div>
               </button>
@@ -548,9 +566,6 @@ export function GitLogView() {
   const branches = useAppStore((s) => s.branches);
   const stashes = useAppStore((s) => s.stashes);
   const gitBusy = useAppStore((s) => s.gitBusy);
-  const fetchRemote = useAppStore((s) => s.fetchRemote);
-  const pullRepo = useAppStore((s) => s.pullRepo);
-  const pushRepo = useAppStore((s) => s.pushRepo);
 
   const [search, setSearch] = useState("");
   const [author, setAuthor] = useState("");
@@ -960,61 +975,45 @@ export function GitLogView() {
               </>
             )}
           </span>
-          <div className="gitlog-action-group" role="group" aria-label="Git 快捷操作">
-            <button
-              type="button"
-              className="gitlog-seg-btn"
-              disabled={gitBusy !== null}
-              title="获取（fetch --prune）：更新远程跟踪分支，不合并"
-              onClick={() => void fetchRemote()}
-            >
-              <RefreshIcon className={gitBusy === "fetch" ? "is-spinning" : undefined} />
-              <span>{gitBusy === "fetch" ? "获取中…" : "获取"}</span>
-            </button>
-            <button
-              type="button"
-              className="gitlog-seg-btn"
-              disabled={gitBusy !== null}
-              title="拉取（pull）：获取并合并到当前分支"
-              onClick={() => void pullRepo()}
-            >
-              <PullIcon />
-              <span>{gitBusy === "pull" ? "拉取中…" : "拉取"}</span>
-              {behindCount > 0 && (
-                <span className="gitlog-seg-badge is-behind">↓{behindCount}</span>
-              )}
-            </button>
-            <button
-              type="button"
-              className="gitlog-seg-btn"
-              disabled={gitBusy !== null}
-              title="推送（push）：把当前分支提交推到远程；新分支自动建立跟踪"
-              onClick={() => void pushRepo()}
-            >
-              <PushIcon />
-              <span>{gitBusy === "push" ? "推送中…" : "推送"}</span>
-              {aheadCount > 0 && <span className="gitlog-seg-badge is-ahead">↑{aheadCount}</span>}
-            </button>
-            <button
-              type="button"
-              className={`gitlog-seg-btn${cmdOpen && cmdTab === "stash" ? " is-active" : ""}`}
-              title="管理工作区贮藏（git stash）"
-              aria-expanded={cmdOpen && cmdTab === "stash"}
-              onClick={() => openCmdTab("stash")}
-            >
-              <StashIcon />
-              <span>贮藏</span>
-              {stashes.length > 0 && <span className="gitlog-seg-badge">{stashes.length}</span>}
-            </button>
+          <div className="gitlog-action-group" role="group" aria-label="Git 操作入口">
             <button
               type="button"
               className={`gitlog-seg-btn gitlog-seg-cmd${cmdOpen ? " is-active" : ""}`}
-              title="展开完整 Git 命令中心（变基拉取、强推、分支/标签、合并、重置）"
+              title="打开 Git 操作中心（获取、拉取、推送、分支/标签、贮藏、历史整理与重置）"
               aria-expanded={cmdOpen}
               onClick={() => openCmdTab(cmdOpen ? cmdTab : "sync")}
             >
-              <TerminalIcon />
-              <span>Git 命令</span>
+              {gitBusy !== null ? <RefreshIcon className="is-spinning" /> : <TerminalIcon />}
+              <span>
+                {gitBusy === "fetch"
+                  ? "获取中…"
+                  : gitBusy === "pull"
+                    ? "拉取中…"
+                    : gitBusy === "push"
+                      ? "推送中…"
+                      : gitBusy === "rebase"
+                        ? "整理中…"
+                        : "Git 操作"}
+              </span>
+              {behindCount > 0 && (
+                <span
+                  className="gitlog-seg-badge is-behind"
+                  title={`落后上游 ${behindCount} 个提交`}
+                >
+                  ↓{behindCount}
+                </span>
+              )}
+              {aheadCount > 0 && (
+                <span className="gitlog-seg-badge is-ahead" title={`领先上游 ${aheadCount} 个提交`}>
+                  ↑{aheadCount}
+                </span>
+              )}
+              {stashes.length > 0 && (
+                <span className="gitlog-seg-badge" title={`工作区贮藏 ${stashes.length} 条`}>
+                  <StashIcon />
+                  {stashes.length}
+                </span>
+              )}
               <ChevronDownIcon className={`gitlog-seg-caret${cmdOpen ? " is-open" : ""}`} />
             </button>
           </div>
