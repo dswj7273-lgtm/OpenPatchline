@@ -23,8 +23,7 @@
 
 ## 安全相关的设计说明
 
-OpenPatchline 会读取本机 git 凭证（macOS Keychain）以执行 fetch/push 等操作，
-相关威胁模型与防护设计见 [`docs/08-performance-security.md`](./docs/08-performance-security.md)。
+OpenPatchline 会读取本机 git 凭证（macOS Keychain）以执行 fetch/push 等操作。
 
 ## 范围之外的报告
 

@@ -25,8 +25,6 @@
 - **外部变更自动刷新** —— 监听 `.git` 目录（notify/FSEvents），外部编辑器或终端执行 commit、checkout、fetch、rebase 后自动刷新，无需手动刷新
 - **远程操作与仓库切换** —— fetch / pull / pull --rebase / push / force-with-lease / push --tags 走 git CLI 复用系统凭证，支持实时流式进度与取消；分支面板与最近仓库切换器（自动清理失效路径）
 
-完整设计文档见 [`docs/`](./docs/)（10 份：产品需求、技术选型、架构、Diff 引擎、Git 引擎、UI/UX、数据流、性能安全、路线图、测试策略）。
-
 ## 技术栈
 
 | 层 | 技术 |
