@@ -1984,7 +1984,15 @@ fn edge_case_shallow_clone() {
     commit_file(&src, "a.txt", "one\n", "c1");
     commit_file(&src, "a.txt", "one\ntwo\n", "c2");
     drop(src);
-    run_cli(src_dir.path(), &["remote", "add", "origin", remote_dir.path().to_str().unwrap()]);
+    run_cli(
+        src_dir.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_dir.path().to_str().unwrap(),
+        ],
+    );
     run_cli(src_dir.path(), &["push", "-u", "origin", "HEAD"]);
 
     // --depth 1 浅克隆
@@ -2028,7 +2036,8 @@ fn edge_case_non_utf8_file() {
         index.write().unwrap();
         let tree = repo.find_tree(index.write_tree_to(&repo).unwrap()).unwrap();
         let sig_ = sig();
-        repo.commit(Some("HEAD"), &sig_, &sig_, "init", &tree, &[]).unwrap();
+        repo.commit(Some("HEAD"), &sig_, &sig_, "init", &tree, &[])
+            .unwrap();
     }
     // 工作区写入非法 UTF-8 字节（0xFF 0xFE）
     std::fs::write(dir.path().join("latin.txt"), b"\xff\xfe garbage\n").unwrap();
@@ -2061,7 +2070,8 @@ fn edge_case_long_nested_path() {
         index.write().unwrap();
         let tree = repo.find_tree(index.write_tree_to(&repo).unwrap()).unwrap();
         let sig_ = sig();
-        repo.commit(Some("HEAD"), &sig_, &sig_, "deep init", &tree, &[]).unwrap();
+        repo.commit(Some("HEAD"), &sig_, &sig_, "deep init", &tree, &[])
+            .unwrap();
     }
     let rel = format!("{deep}/leaf.txt");
     std::fs::write(full.join("leaf.txt"), "deep changed\n").unwrap();

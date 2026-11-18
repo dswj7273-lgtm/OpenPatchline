@@ -30,3 +30,6 @@ src-tauri/gen/
 # Local Word documents and design docs
 *.docx
 docs/
+
+# 覆盖率产物（v8 provider 输出）
+coverage/

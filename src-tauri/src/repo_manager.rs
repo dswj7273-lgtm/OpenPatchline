@@ -250,9 +250,7 @@ mod tests {
         for i in 0..(MAX_OPEN_REPOS + 2) {
             let dir = tempfile::tempdir().expect("创建目录失败");
             git2::Repository::init(dir.path()).expect("init repo");
-            let (info, evicted) = manager
-                .open_with_eviction(dir.path())
-                .expect("打开失败");
+            let (info, evicted) = manager.open_with_eviction(dir.path()).expect("打开失败");
             if i == 0 {
                 first_id = info.id.clone();
                 assert!(evicted.is_empty());
@@ -260,7 +258,10 @@ mod tests {
             dirs.push(dir); // 保持目录存活
         }
         // 第一个仓库应已被淘汰（最久未使用），总数不超过上限。
-        assert!(manager.entry(&first_id).is_err(), "最久未使用的仓库应被淘汰");
+        assert!(
+            manager.entry(&first_id).is_err(),
+            "最久未使用的仓库应被淘汰"
+        );
         // 淘汰列表累计长度 = 超出上限的数量。
         // 重新打开第一个仓库（此时它是最新的），不应淘汰自身。
         let dir0 = dirs[0].path();

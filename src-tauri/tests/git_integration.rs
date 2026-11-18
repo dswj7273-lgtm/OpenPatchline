@@ -323,8 +323,7 @@ fn integration_full_journey_open_stage_commit_push_fetch() {
     {
         let mut e = lock_entry(&entry);
         git_service::stage_file(&mut e.repo, "README.md").expect("暂存失败");
-        let new_id = git_service::create_commit(&mut e.repo, "feat: bump to v2")
-            .expect("提交失败");
+        let new_id = git_service::create_commit(&mut e.repo, "feat: bump to v2").expect("提交失败");
         assert_eq!(new_id.len(), 40);
     }
 

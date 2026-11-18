@@ -40,7 +40,7 @@ use crate::types::{
     DiffLineSelection, DiffPatchAction, DiffScope, DiffScopeKind, FetchResult, FileBlameResult,
     FileDiffResult, FileHistoryEntry, FileStatus, GitActionResult, GitProgressEvent, GraphPage,
     LogFilter, OpenRepositoryOutcome, PullResult, PushResult, RebaseCommitEntry, RebasePlanEntry,
-    RecentRepo, SafetyBackup, RepoInfo, StashEntry,
+    RecentRepo, RepoInfo, SafetyBackup, StashEntry,
 };
 use crate::watcher::RepoWatcher;
 

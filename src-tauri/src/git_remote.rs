@@ -478,7 +478,10 @@ pub fn git_version() -> AppResult<String> {
 /// 失败静默忽略：commit-graph 仅是加速缓存，缺失不影响正确性；
 /// 大仓库首次构建可能稍慢，放在拉取完成之后不阻塞进度展示。
 fn maintain_commit_graph(workdir: &Path) {
-    let _ = run_git(workdir, &["commit-graph", "write", "--reachable", "--split"]);
+    let _ = run_git(
+        workdir,
+        &["commit-graph", "write", "--reachable", "--split"],
+    );
 }
 
 fn run_git_streaming(

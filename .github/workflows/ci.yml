@@ -35,9 +35,19 @@ jobs:
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
-      - name: performance benchmark (observation)
-        run: cargo bench --manifest-path src-tauri/Cargo.toml --bench perf
-        continue-on-error: true
+      # v0.8 验收：核心模块（git_service / diff_engine / graph 等，剔除
+      # lib/commands/watcher 等 UI 胶水）行覆盖率 ≥ 75%（docs/11 §五）
+      - name: coverage (core modules, fail-under 75%)
+        run: |
+          cargo install cargo-llvm-cov --locked
+          cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lib \
+            --ignore-filename-regex "src/(lib|commands|watcher)\.rs" \
+            --fail-under-lines 75 --summary-only
+
+      - name: performance benchmark (regression gate, 20%)
+        run: |
+          cargo bench --manifest-path src-tauri/Cargo.toml --bench perf
+          python3 scripts/check-perf.py --report src-tauri/target/perf-report.json
 
   frontend:
     name: Frontend (tsc + lint + format + test + build)
@@ -61,8 +71,8 @@ jobs:
       - name: format check
         run: npm run format:check
 
-      - name: unit tests
-        run: npm run test
+      - name: unit tests (coverage, lines >= 60%)
+        run: npm test -- --coverage
 
       - name: build
         run: npm run build
