@@ -111,17 +111,24 @@ function buildCommands(): CommandItem[] {
     );
     remote("整理最近提交（轻量 Rebase）", "rebase rewrite 整理", () => s.openRebaseModal());
 
-    // —— 危险操作撤销（v0.8 / 8.5）：恢复到备份引用，本身也是改写操作 → danger ——
+    // —— 危险操作撤销（v0.8 / 8.5）：按备份类型选择恢复方式 ——
+    // force-push：把远端旧 tip 推回远端（真正撤销强推改写）；
+    // 其余：本地 reset --hard（后端拒绝脏工作区）。
     for (const backup of s.safetyBackups.slice(0, 4)) {
+      const forcePush = backup.kind === "force-push";
       items.push({
         id: `undo-${backup.refName}`,
-        title: `恢复危险操作前状态（${backup.refName} · ${backup.shortId} ${backup.summary}）`,
+        title: forcePush
+          ? `恢复强推前远端状态（${backup.refName} · ${backup.shortId} ${backup.summary}）`
+          : `恢复危险操作前状态（${backup.refName} · ${backup.shortId} ${backup.summary}）`,
         group: "Git 操作",
-        detail: "reset --hard 到备份引用",
+        detail: forcePush
+          ? "把备份引用 force-with-lease 推回远端"
+          : "reset --hard 到备份引用（有未提交修改时会拒绝）",
         keywords: `undo backup restore 撤销 恢复 备份 ${backup.refName}`,
         danger: true,
         icon: <UndoIcon />,
-        run: () => void s.resetHead(backup.fullRef, "hard"),
+        run: () => void s.restoreSafetyBackup(backup.fullRef),
       });
     }
 

@@ -624,8 +624,20 @@ pub struct SafetyBackup {
     pub ref_name: String,
     /// 完整引用名。
     pub full_ref: String,
+    /// 恢复方式（review 修复）：force-push → 推回远端；local → reset --hard。
+    pub kind: SafetyBackupKind,
     pub commit_id: String,
     pub short_id: String,
     pub summary: String,
     pub timestamp: i64,
+}
+
+/// 备份恢复方式（review 修复）：区分强推备份与其余本地备份。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SafetyBackupKind {
+    /// 本地 reset --hard 到备份引用。
+    Local,
+    /// 把备份引用 force-with-lease 推回远端分支。
+    ForcePush,
 }

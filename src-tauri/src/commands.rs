@@ -1347,6 +1347,28 @@ pub async fn list_safety_backups(
     .map_err(join_error)?
 }
 
+/// 从命令面板恢复安全备份（review 修复统一入口：强推推回远端 /
+/// 其余 reset --hard，脏工作区拒绝）。
+#[tauri::command]
+pub async fn restore_safety_backup(
+    state: State<'_, RepoManager>,
+    repo_id: String,
+    full_ref: String,
+) -> AppResult<GitActionResult> {
+    let entry = state.inner().clone().entry(&repo_id)?;
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<GitActionResult> {
+        let entry = lock_entry(&entry);
+        let workdir = entry
+            .repo
+            .workdir()
+            .ok_or_else(|| AppError::InvalidArg("bare 仓库没有工作区".to_string()))?
+            .to_path_buf();
+        git_remote::restore_safety_backup(&entry.repo, &workdir, &full_ref)
+    })
+    .await
+    .map_err(join_error)?
+}
+
 /// 组装诊断信息（v0.8 / 8.7 设置页"复制诊断信息"）：版本、系统、
 /// git 版本与日志路径，用于问题反馈。
 #[tauri::command]

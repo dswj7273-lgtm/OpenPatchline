@@ -439,6 +439,8 @@ export interface SafetyBackup {
   /** 短引用名（refs/opl-backup/ 之后的部分）。 */
   refName: string;
   fullRef: string;
+  /** 恢复方式：force-push → 推回远端；local → reset --hard。 */
+  kind: "local" | "force-push";
   commitId: string;
   shortId: string;
   summary: string;

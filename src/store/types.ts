@@ -279,6 +279,8 @@ export interface WorkspaceSlice {
   cherryPickCommit: (commitId: string) => Promise<void>;
   revertCommit: (commitId: string) => Promise<void>;
   resetHead: (target: string, mode: ResetMode) => Promise<void>;
+  /** 从命令面板恢复安全备份（review 修复统一入口）。 */
+  restoreSafetyBackup: (fullRef: string) => Promise<void>;
   discardFile: (path: string) => Promise<void>;
   /** 从指定提交恢复单个文件（覆盖工作区，脏文件先拒绝，v0.7 / 7.7）。 */
   restoreFileFromCommit: (commitId: string, path: string) => Promise<boolean>;

@@ -162,6 +162,7 @@ pub fn run() {
             commands::interactive_rebase,
             commands::checkout_file_from,
             commands::list_safety_backups,
+            commands::restore_safety_backup,
             commands::get_diagnostics,
             commands::reveal_log_file
         ])

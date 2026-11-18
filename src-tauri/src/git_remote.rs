@@ -26,7 +26,8 @@ use std::time::{Duration, Instant};
 use crate::error::{AppError, AppResult};
 use crate::git_service;
 use crate::types::{
-    FetchResult, GitActionResult, PullResult, PushResult, RepoState, SafetyBackup, StashEntry,
+    FetchResult, GitActionResult, PullResult, PushResult, RepoState, SafetyBackup,
+    SafetyBackupKind, StashEntry,
 };
 
 /// 返回给前端的输出摘要行数上限。
@@ -475,13 +476,17 @@ pub fn git_version() -> AppResult<String> {
 
 /// 拉取后维护 commit-graph 文件（v0.8 / 8.3 大仓库图遍历加速）。
 ///
-/// 失败静默忽略：commit-graph 仅是加速缓存，缺失不影响正确性；
-/// 大仓库首次构建可能稍慢，放在拉取完成之后不阻塞进度展示。
+/// review 修复：改为**后台线程**执行——此前同步跑在 fetch / pull 命令里，
+/// 大仓库首次构建可达数十秒，拉取完成后的忙碌状态被白白拖住。
+/// 失败静默忽略：commit-graph 仅是加速缓存，缺失不影响正确性。
 fn maintain_commit_graph(workdir: &Path) {
-    let _ = run_git(
-        workdir,
-        &["commit-graph", "write", "--reachable", "--split"],
-    );
+    let workdir = workdir.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = run_git(
+            &workdir,
+            &["commit-graph", "write", "--reachable", "--split"],
+        );
+    });
 }
 
 fn run_git_streaming(
@@ -603,7 +608,7 @@ pub fn fetch_with_progress(
         &["fetch", "--progress", "--prune", &remote_name],
         progress,
     )?;
-    // 拉取后维护 commit-graph（v0.8 / 8.3；失败静默）。
+    // 拉取后在后台线程维护 commit-graph（review 修复：不再拖住命令完成）。
     maintain_commit_graph(workdir);
     Ok(FetchResult {
         remote: remote_name,
@@ -651,7 +656,7 @@ pub fn pull_with_progress(
     }
     let output = run_git_streaming(workdir, &args, progress)?;
     let repo_info = git_service::repo_info(repo)?;
-    // 拉取后维护 commit-graph（v0.8 / 8.3；失败静默）。
+    // 拉取后在后台线程维护 commit-graph（review 修复：不再拖住命令完成）。
     maintain_commit_graph(workdir);
     Ok(PullResult {
         output,
@@ -666,12 +671,6 @@ fn push_branch_with(
     extra_flag: Option<&str>,
     progress: Option<RemoteProgress<'_>>,
 ) -> AppResult<PushResult> {
-    // 安全强推会改写远程历史：记录本地当前头便于恢复（v0.8 / 8.5）。
-    let _backup = if extra_flag.is_some_and(|f| f.contains("force")) {
-        backup_before_destructive(repo)
-    } else {
-        None
-    };
     let branch = repo
         .head()
         .ok()
@@ -684,6 +683,13 @@ fn push_branch_with(
         .and_then(|b| b.upstream().ok())
         .is_some();
     let remote_name = default_remote(repo, None)?;
+    // 安全强推会改写远程历史：记录**远端旧 tip**（review 修复：此前记
+    // 本地头，而推送不动本地头，恢复是空操作）；恢复时推回远端。
+    let force_backup = if extra_flag.is_some_and(|f| f.contains("force")) {
+        backup_before_force_push(repo, &remote_name, &branch)?
+    } else {
+        None
+    };
     let mut args: Vec<&str> = vec!["push", "--progress"];
     if let Some(flag) = extra_flag {
         args.push(flag);
@@ -693,6 +699,12 @@ fn push_branch_with(
     }
     let output = run_git_streaming(workdir, &args, progress)?;
     let repo_info = git_service::repo_info(repo)?;
+    let output = match force_backup {
+        Some(_) => {
+            format!("{output}\n（远端旧状态已备份，可从命令面板 ⌘K「恢复强推前远端状态」撤销）")
+        }
+        None => output,
+    };
     Ok(PushResult {
         output,
         repo: repo_info,
@@ -1088,13 +1100,36 @@ pub fn discard_file(repo: &git2::Repository, workdir: &Path, path: &str) -> AppR
 }
 
 /// 丢弃工作区与暂存区的全部未提交更改（`git reset --hard HEAD` + `git clean -fd`）。
+///
+/// review 修复：先尝试 `git stash push -u` 留一份**真正可恢复**的备份
+/// （stash 本身就完成丢弃动作，贮藏列表里可随时弹出恢复）；此前只备份
+/// HEAD 引用，而丢弃全部不动 HEAD，恢复是空操作。冲突 / 空仓库等 stash
+/// 不可用的场景退回裸丢弃，输出如实说明没有备份。
 pub fn discard_all(repo: &git2::Repository, workdir: &Path) -> AppResult<GitActionResult> {
-    // 会丢弃全部未提交更改（含未跟踪文件，clean 无法从任何 ref 恢复）：
-    // 先记录备份引用（v0.8 / 8.5）。
-    let backup_note = backup_before_destructive(repo)
-        .map(|r| format!("（原 HEAD 已备份于 {r}）"))
-        .unwrap_or_default();
     let mut outputs = Vec::new();
+    let mut backup_note = String::new();
+    if repo.head().is_ok() {
+        let (stash_ok, stash_out) = run_git_tolerant(
+            workdir,
+            &[
+                "stash",
+                "push",
+                "-u",
+                "-m",
+                "OPL 备份：丢弃全部更改前自动贮藏",
+            ],
+            &[],
+        )?;
+        if !stash_out.trim().is_empty() {
+            outputs.push(stash_out.trim().to_string());
+        }
+        if stash_ok && !stash_out.contains("No local changes to save") {
+            backup_note = "（已自动贮藏备份，可在贮藏列表恢复）".to_string();
+        } else if !stash_ok {
+            backup_note = "（当前状态无法自动备份：stash 失败，丢弃后不可恢复）".to_string();
+        }
+    }
+    // stash 成功时两步均为空操作；失败时保底执行原破坏路径。
     if repo.head().is_ok() {
         let reset_out = run_git(workdir, &["reset", "--hard", "HEAD"])?;
         if !reset_out.is_empty() {
@@ -1216,9 +1251,22 @@ pub fn stash_branch(
 /// 变基前备份引用：始终指向最近一次交互式变基开始前的分支头。
 pub const REBASE_BACKUP_REF: &str = "refs/opl-backup/rebase";
 
-/// 危险操作（reset --hard / 丢弃全部 / 安全强推）前的备份引用前缀
-/// （v0.8 / 8.5）：指向操作前的分支头，用户可从命令面板一键恢复。
+/// 危险操作（reset --hard）前的备份引用前缀（v0.8 / 8.5）：指向操作前的
+/// 分支头，用户可从命令面板一键恢复。
+///
+/// review 修复：丢弃全部更改与安全强推不再写这个引用——前者的损失在
+/// 工作区（HEAD 没动，reset 回去是空操作），后者的损失在远端（本地
+/// HEAD 同样没动）。它们分别改用贮藏备份与 [`FORCE_PUSH_BACKUP_REF`]。
 pub const DESTRUCTIVE_BACKUP_REF: &str = "refs/opl-backup/pre-destructive";
+
+/// 安全强推前的备份引用（v0.8 / 8.5，review 修复）：指向**远端旧 tip**
+/// （本分支的远端跟踪引用），恢复时 force-with-lease 推回远端。
+pub const FORCE_PUSH_BACKUP_REF: &str = "refs/opl-backup/pre-force-push";
+
+/// 备份元数据目录（.git/opl-backup/，强推备份记录 remote / branch）。
+fn backup_meta_dir(repo: &git2::Repository) -> std::path::PathBuf {
+    repo.path().join("opl-backup")
+}
 
 /// 把当前分支头记录到危险操作备份引用（HEAD 不可用时静默跳过——
 /// 空仓库无可备份内容）。返回备份引用名（已记录时）。
@@ -1234,7 +1282,120 @@ fn backup_before_destructive(repo: &git2::Repository) -> Option<String> {
     Some(DESTRUCTIVE_BACKUP_REF.to_string())
 }
 
+/// 强推前记录远端旧 tip（review 修复：恢复 = 把这个引用推回远端，
+/// 而不是本地 reset）。远端跟踪引用不存在（首次推送）时返回 None。
+fn backup_before_force_push(
+    repo: &git2::Repository,
+    remote: &str,
+    branch: &str,
+) -> AppResult<Option<String>> {
+    let tracking = format!("refs/remotes/{remote}/{branch}");
+    let Ok(reference) = repo.find_reference(&tracking) else {
+        return Ok(None);
+    };
+    let target = reference
+        .peel_to_commit()
+        .map_err(|e| AppError::Git(format!("解析远端跟踪引用失败: {e}")))?
+        .id();
+    repo.reference(
+        FORCE_PUSH_BACKUP_REF,
+        target,
+        true,
+        "openpatchline: remote tip before force push",
+    )
+    .map_err(|e| AppError::Git(format!("创建强推备份引用失败: {e}")))?;
+    // 恢复所需的 remote / branch 写入元数据（分支名不含引号，可安全内联）。
+    let dir = backup_meta_dir(repo);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| AppError::Io(format!("创建备份元数据目录失败: {e}")))?;
+    std::fs::write(
+        dir.join("force-push.json"),
+        format!("{{\"remote\":\"{remote}\",\"branch\":\"{branch}\"}}\n"),
+    )
+    .map_err(|e| AppError::Io(format!("写入强推备份元数据失败: {e}")))?;
+    Ok(Some(FORCE_PUSH_BACKUP_REF.to_string()))
+}
+
+/// 从命令面板恢复安全备份（v0.8 / 8.5，review 修复统一入口）：
+///
+/// - `pre-force-push`：把备份引用 force-with-lease 推回远端分支（真正
+///   撤销强推对远端的改写；推送不动工作区，不检查脏文件）；
+/// - 其余 `refs/opl-backup/*`：本地 `reset --hard` 恢复。工作区存在已
+///   跟踪的未提交修改时**拒绝**（review 修复：一键恢复不得静默吞掉
+///   未提交工作；仅未跟踪文件不阻挡，reset --hard 不会动它们）。
+///   恢复前同样先记录当前头，恢复本身可再撤销。
+pub fn restore_safety_backup(
+    repo: &git2::Repository,
+    workdir: &Path,
+    full_ref: &str,
+) -> AppResult<GitActionResult> {
+    if !full_ref.starts_with("refs/opl-backup/") {
+        return Err(AppError::InvalidArg(format!(
+            "不是安全备份引用: {full_ref}"
+        )));
+    }
+    if full_ref == FORCE_PUSH_BACKUP_REF {
+        // 读取 remote / branch 元数据，推回远端。
+        let meta_path = backup_meta_dir(repo).join("force-push.json");
+        let meta = std::fs::read_to_string(&meta_path)
+            .map_err(|e| AppError::NotFound(format!("强推备份元数据缺失（{e}），无法恢复远端")))?;
+        let (remote, branch) = parse_force_push_meta(&meta)?;
+        let refspec = format!("{FORCE_PUSH_BACKUP_REF}:refs/heads/{branch}");
+        let output = run_git(workdir, &["push", "--force-with-lease", &remote, &refspec])?;
+        return action_result(
+            repo,
+            format!(
+                "{output}\n（远端 {remote}/{branch} 已恢复到强推前的 {FORCE_PUSH_BACKUP_REF}）"
+            ),
+        );
+    }
+    // 本地恢复：脏工作区拒绝（未跟踪文件不影响 reset --hard）。
+    let dirty = git_service::status(repo)?.iter().any(|s| {
+        s.staged.is_some()
+            || s.unstaged
+                .is_some_and(|c| c != crate::types::ChangeType::Untracked)
+    });
+    if dirty {
+        return Err(AppError::Git(
+            "工作区存在未提交修改，恢复（reset --hard）会丢弃它们；请先提交或贮藏后再恢复"
+                .to_string(),
+        ));
+    }
+    // 先取备份目标，再记录「恢复前」备份——两者都写 DESTRUCTIVE_BACKUP_REF，
+    // 顺序颠倒会把要恢复的引用覆写成当前头（恢复退化为空操作）。
+    let target = repo
+        .find_reference(full_ref)
+        .map_err(|e| AppError::NotFound(format!("备份引用不存在: {full_ref}（{e}）")))?
+        .peel_to_commit()
+        .map_err(|e| AppError::Git(format!("解析备份提交失败: {e}")))?
+        .id()
+        .to_string();
+    backup_before_destructive(repo);
+    let output = run_git(workdir, &["reset", "--hard", &target])?;
+    action_result(
+        repo,
+        format!("{output}（恢复前状态已再备份于 {DESTRUCTIVE_BACKUP_REF}）"),
+    )
+}
+
+/// 解析 force-push.json（remote / branch 两个字段，写入时保证无引号）。
+fn parse_force_push_meta(meta: &str) -> AppResult<(String, String)> {
+    let pick = |key: &str| -> Option<String> {
+        let start = meta.find(&format!("\"{key}\":\""))? + key.len() + 4;
+        let rest = &meta[start..];
+        let end = rest.find('"')?;
+        Some(rest[..end].to_string())
+    };
+    match (pick("remote"), pick("branch")) {
+        (Some(remote), Some(branch)) if !remote.is_empty() && !branch.is_empty() => {
+            Ok((remote, branch))
+        }
+        _ => Err(AppError::InvalidArg("强推备份元数据不完整".to_string())),
+    }
+}
+
 /// 列出全部安全备份引用（refs/opl-backup/*，v0.8 / 8.5 撤销入口数据源）。
+/// `kind` 区分恢复方式（review 修复）：force-push → 推回远端，local → reset。
 pub fn list_safety_backups(repo: &git2::Repository) -> AppResult<Vec<SafetyBackup>> {
     let mut out = Vec::new();
     let refs = repo
@@ -1250,9 +1411,15 @@ pub fn list_safety_backups(repo: &git2::Repository) -> AppResult<Vec<SafetyBacku
             continue;
         };
         let id = commit.id().to_string();
+        let kind = if name == FORCE_PUSH_BACKUP_REF {
+            SafetyBackupKind::ForcePush
+        } else {
+            SafetyBackupKind::Local
+        };
         out.push(SafetyBackup {
             ref_name: short.to_string(),
             full_ref: name.to_string(),
+            kind,
             commit_id: id.clone(),
             short_id: id.chars().take(7).collect(),
             summary: commit
@@ -2570,5 +2737,122 @@ mod tests {
         checkout_file_from(&fx.work, &dir, &del_id, "a.txt").expect("恢复已删除文件失败");
         assert!(dir.join("a.txt").exists());
         assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v1\n");
+    }
+
+    /// review 修复：本地备份恢复（reset --hard）干净工作区放行、脏工作区拒绝。
+    #[test]
+    fn restore_safety_backup_local_resets_and_refuses_dirty() {
+        let fx = setup_with_bare_remote();
+        let dir = fx.workdir();
+        let _c1 = commit_file(&fx.work, "a.txt", "v1\n", "one");
+        let _c2 = commit_file(&fx.work, "a.txt", "v1\nv2\n", "two");
+        let before = fx.head_id();
+
+        // reset --hard 到 c2 的父（= c1）会先记录备份引用
+        reset_head(&fx.work, &dir, "HEAD~1", "hard").expect("reset 失败");
+        assert_ne!(fx.head_id(), before);
+
+        // 干净工作区：恢复备份 → 回到 reset 前的头
+        restore_safety_backup(&fx.work, &dir, DESTRUCTIVE_BACKUP_REF).expect("恢复备份失败");
+        assert_eq!(fx.head_id(), before);
+
+        // 脏工作区（已跟踪修改）：拒绝并给出指引；仅未跟踪文件不阻挡
+        std::fs::write(dir.join("a.txt"), "dirty\n").unwrap();
+        let err = restore_safety_backup(&fx.work, &dir, DESTRUCTIVE_BACKUP_REF)
+            .expect_err("脏工作区应拒绝恢复");
+        assert!(err.to_string().contains("未提交修改"), "实际: {err}");
+        // 清掉修改、只留未跟踪文件 → 放行
+        discard_file(&fx.work, &dir, "a.txt").expect("丢弃修改失败");
+        std::fs::write(dir.join("new.txt"), "untracked\n").unwrap();
+        restore_safety_backup(&fx.work, &dir, DESTRUCTIVE_BACKUP_REF)
+            .expect("仅未跟踪文件不应阻挡恢复");
+        assert!(dir.join("new.txt").exists(), "reset --hard 不动未跟踪文件");
+
+        // 非备份前缀引用拒绝（防任意 reset 注入）
+        assert!(restore_safety_backup(&fx.work, &dir, "refs/heads/main").is_err());
+    }
+
+    /// review 修复：强推备份记录**远端旧 tip**，恢复把它推回远端。
+    #[test]
+    fn force_push_backup_restores_remote_tip() {
+        let fx = setup_with_bare_remote();
+        let dir = fx.workdir();
+        let _c1 = commit_file(&fx.work, "a.txt", "one\n", "pushed");
+        push(&fx.work, &dir).expect("首次推送失败");
+        let remote_tip_before = fx.head_id();
+
+        // 改写本地历史（amend）→ 普通推送会被拒，安全强推成功并留备份
+        amend_commit(&fx.work, &dir, "rewritten").expect("amend 失败");
+        push_force_with_lease(&fx.work, &dir).expect("安全强推失败");
+        let rewritten = fx.head_id();
+        assert_ne!(rewritten, remote_tip_before);
+        // 远端已被改写
+        let bare = git2::Repository::open_bare(fx.origin_dir.path()).unwrap();
+        let branch = fx.branch.clone();
+        let remote_now = bare
+            .find_reference(&format!("refs/heads/{branch}"))
+            .unwrap()
+            .target()
+            .unwrap()
+            .to_string();
+        assert_eq!(remote_now, rewritten);
+
+        // 备份列表包含 force-push 类型的条目
+        let backups = list_safety_backups(&fx.work).unwrap();
+        let fp = backups
+            .iter()
+            .find(|b| b.full_ref == FORCE_PUSH_BACKUP_REF)
+            .expect("应存在强推备份");
+        assert_eq!(fp.kind, SafetyBackupKind::ForcePush);
+        assert_eq!(fp.commit_id, remote_tip_before);
+
+        // 恢复：把备份推回远端，远端回到强推前
+        restore_safety_backup(&fx.work, &dir, FORCE_PUSH_BACKUP_REF).expect("恢复强推失败");
+        let remote_after = bare
+            .find_reference(&format!("refs/heads/{branch}"))
+            .unwrap()
+            .target()
+            .unwrap()
+            .to_string();
+        assert_eq!(remote_after, remote_tip_before, "远端应恢复到强推前 tip");
+        // 本地头不受影响
+        assert_eq!(fx.head_id(), rewritten);
+    }
+
+    /// review 修复：丢弃全部先留可恢复的贮藏备份（含未跟踪文件）。
+    #[test]
+    fn discard_all_leaves_recoverable_stash() {
+        let fx = setup_with_bare_remote();
+        let dir = fx.workdir();
+        let _c1 = commit_file(&fx.work, "a.txt", "v1\n", "base");
+
+        std::fs::write(dir.join("a.txt"), "dirty\n").unwrap();
+        std::fs::write(dir.join("untracked.txt"), "new\n").unwrap();
+        let res = discard_all(&fx.work, &dir).expect("discard_all 失败");
+        assert!(
+            res.output.contains("已自动贮藏备份"),
+            "输出应说明备份位置: {}",
+            res.output
+        );
+        // 工作区已清空
+        assert!(!dir.join("untracked.txt").exists());
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v1\n");
+        // 不再写入误导性的 pre-destructive 引用（丢弃不动 HEAD，恢复不了）
+        assert!(
+            fx.work.find_reference(DESTRUCTIVE_BACKUP_REF).is_err(),
+            "discard_all 不应再写 pre-destructive 引用"
+        );
+        // 贮藏里能完整找回（含未跟踪）
+        let stashes = list_stashes(&dir).unwrap();
+        assert_eq!(stashes.len(), 1);
+        stash_apply(&fx.work, &dir, 0, false).expect("恢复贮藏失败");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "dirty\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("untracked.txt")).unwrap(),
+            "new\n"
+        );
     }
 }

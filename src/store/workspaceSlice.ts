@@ -662,6 +662,24 @@ export const createWorkspaceSlice: AppSlice<WorkspaceSlice> = (set, get) => {
       });
     },
 
+    restoreSafetyBackup: async (fullRef) => {
+      // review 修复：统一恢复入口——强推备份推回远端，其余本地 reset；
+      // 脏工作区由后端拒绝（错误信息指导先提交 / 贮藏）。
+      await runExclusive("reset", "restoreSafetyBackup", {}, async (repoId) => {
+        const res = await api.restoreSafetyBackup(repoId, fullRef);
+        if (get().repo?.id !== repoId) return false;
+        set({ repo: res.repo, selectedCommitId: null, commitFiles: [] });
+        await get().reloadGraph();
+        await get().loadFileStatus();
+        await get().loadBranches();
+        if (get().error === null) {
+          set({ notice: `已恢复备份 ${fullRef}` });
+          return true;
+        }
+        return false;
+      });
+    },
+
     restoreFileFromCommit: async (commitId, path) =>
       runExclusive("checkout", "restoreFileFromCommit", {}, async (repoId) => {
         // 安全闸：该文件存在未提交修改时拒绝，避免静默覆盖丢失更改。

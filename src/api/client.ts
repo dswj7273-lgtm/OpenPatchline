@@ -175,6 +175,11 @@ export function listSafetyBackups(repoId: string): Promise<SafetyBackup[]> {
   return invoke<SafetyBackup[]>("list_safety_backups", { repoId });
 }
 
+/** 从命令面板恢复安全备份（review 修复统一入口）。 */
+export function restoreSafetyBackup(repoId: string, fullRef: string): Promise<GitActionResult> {
+  return invoke<GitActionResult>("restore_safety_backup", { repoId, fullRef });
+}
+
 /** 组装诊断信息文本（v0.8 / 8.7）。 */
 export function getDiagnostics(): Promise<string> {
   return invoke<string>("get_diagnostics");

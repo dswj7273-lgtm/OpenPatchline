@@ -50,6 +50,9 @@ export const createRepoSlice: AppSlice<RepoSlice> = (set, get) => ({
         blameReturnView: "log",
         branches: [],
         stashes: [],
+        // review 修复：备份引用一并清空——固定引用名跨仓库普遍存在，
+        // 残留上一仓库的撤销条目会对新仓库执行无关的 reset --hard。
+        safetyBackups: [],
         commitMetadata: null,
         commitHistory: loadCommitHistory(repo.id),
         gitBusy: null,
