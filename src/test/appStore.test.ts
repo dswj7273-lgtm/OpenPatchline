@@ -47,6 +47,7 @@ vi.mock("../api/client", async (importOriginal) => {
         ignoreWhitespaceDefault: false,
         externalEditorCommand: null,
         gitExecutablePath: null,
+        onboardingDismissed: false,
       },
       fresh: false,
     }),
@@ -215,6 +216,7 @@ describe("useAppStore slices", () => {
         ignoreWhitespaceDefault: true,
         externalEditorCommand: null,
         gitExecutablePath: null,
+        onboardingDismissed: false,
       },
       fresh: false,
     });

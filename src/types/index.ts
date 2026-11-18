@@ -406,6 +406,18 @@ export interface AppSettings {
   externalEditorCommand: string | null;
   /** Git 可执行文件路径覆盖。 */
   gitExecutablePath: string | null;
+  /** 首次启动引导（v1.0 / 10.4）：已跳过或完成，不再自动弹出。 */
+  onboardingDismissed: boolean;
+}
+
+/** 首次启动引导的 git 环境状态（v1.0 / 10.4）。 */
+export interface GitSetupInfo {
+  /** `git --version` 输出；探测失败为 null。 */
+  gitVersion: string | null;
+  /** 全局 user.name；未配置为 null。 */
+  userName: string | null;
+  /** 全局 user.email；未配置为 null。 */
+  userEmail: string | null;
 }
 
 /** 应用默认设置（与 Rust 侧 Default 保持一致）。 */
@@ -418,6 +430,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   ignoreWhitespaceDefault: false,
   externalEditorCommand: null,
   gitExecutablePath: null,
+  onboardingDismissed: false,
 };
 
 /** 单个文件的提交历史条目（--follow 跨重命名追踪，v0.7 / 7.1）。 */

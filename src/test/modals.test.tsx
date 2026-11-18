@@ -36,6 +36,7 @@ const defaultSettings = {
   ignoreWhitespaceDefault: false,
   externalEditorCommand: null,
   gitExecutablePath: null,
+  onboardingDismissed: false,
 };
 
 describe("SettingsModal（v0.8 / 8.2）", () => {

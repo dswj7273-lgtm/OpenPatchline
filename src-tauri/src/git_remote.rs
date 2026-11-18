@@ -474,6 +474,72 @@ pub fn git_version() -> AppResult<String> {
     Ok(stdout.trim().to_string())
 }
 
+/// 首次启动引导（v1.0 / 10.4）：git 可用性与全局身份配置状态。
+pub fn check_git_setup() -> crate::types::GitSetupInfo {
+    check_git_setup_env(&[])
+}
+
+/// [`check_git_setup`] 的环境注入版（测试用 `GIT_CONFIG_GLOBAL` 指向临时
+/// 文件，避免读写真实 `~/.gitconfig`）。
+pub(crate) fn check_git_setup_env(extra_envs: &[(&str, &str)]) -> crate::types::GitSetupInfo {
+    let git_version = git_version().ok();
+    let read = |key: &str| {
+        run_git_tolerant(
+            Path::new("."),
+            &["config", "--global", "--get", key],
+            extra_envs,
+        )
+        .ok()
+        .filter(|(ok, out)| *ok && !out.trim().is_empty())
+        .map(|(_, out)| out.trim().to_string())
+    };
+    crate::types::GitSetupInfo {
+        git_version,
+        user_name: read("user.name"),
+        user_email: read("user.email"),
+    }
+}
+
+/// 写入全局 git 身份（`git config --global user.name / user.email`，
+/// v1.0 / 10.4 首次启动引导）。
+pub fn set_git_identity(name: &str, email: &str) -> AppResult<()> {
+    set_git_identity_env(name, email, &[])
+}
+
+/// [`set_git_identity`] 的环境注入版（测试隔离全局配置）。
+pub(crate) fn set_git_identity_env(
+    name: &str,
+    email: &str,
+    extra_envs: &[(&str, &str)],
+) -> AppResult<()> {
+    let name = name.trim();
+    let email = email.trim();
+    if name.is_empty() || name.contains('\n') || name.contains('\r') {
+        return Err(AppError::InvalidArg(
+            "user.name 不能为空，也不能包含换行".to_string(),
+        ));
+    }
+    if !email.contains('@') || email.contains(char::is_whitespace) {
+        return Err(AppError::InvalidArg(
+            "user.email 需要形如 name@example.com，且不能包含空白".to_string(),
+        ));
+    }
+    for (key, value) in [("user.name", name), ("user.email", email)] {
+        let (ok, out) = run_git_tolerant(
+            Path::new("."),
+            &["config", "--global", key, value],
+            extra_envs,
+        )?;
+        if !ok {
+            return Err(AppError::Git(format!(
+                "写入全局配置 {key} 失败:\n{}",
+                out.trim()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// 拉取后维护 commit-graph 文件（v0.8 / 8.3 大仓库图遍历加速）。
 ///
 /// review 修复：改为**后台线程**执行——此前同步跑在 fetch / pull 命令里，
@@ -2854,5 +2920,38 @@ mod tests {
             std::fs::read_to_string(dir.join("untracked.txt")).unwrap(),
             "new\n"
         );
+    }
+
+    /// v1.0 / 10.4：全局身份读写经 `GIT_CONFIG_GLOBAL` 隔离，不碰真实
+    /// `~/.gitconfig`；非法输入拒绝。
+    #[test]
+    fn git_identity_roundtrip_isolated() {
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let cfg_file = cfg_dir.path().join("gitconfig");
+        let cfg_str = cfg_file.to_string_lossy().into_owned();
+        let envs: Vec<(&str, &str)> = vec![
+            ("GIT_CONFIG_GLOBAL", cfg_str.as_str()),
+            ("GIT_CONFIG_SYSTEM", "/dev/null"),
+        ];
+
+        // 初始：全局身份未配置
+        let info = check_git_setup_env(&envs);
+        assert!(info.user_name.is_none(), "隔离配置初始应为空");
+        assert!(info.user_email.is_none());
+
+        // 写入 → 读回
+        set_git_identity_env("Ada Lovelace", "ada@example.com", &envs).expect("写入身份失败");
+        let info = check_git_setup_env(&envs);
+        assert_eq!(info.user_name.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(info.user_email.as_deref(), Some("ada@example.com"));
+        assert!(info.git_version.is_some(), "开发 / CI 环境应能探测到 git");
+
+        // 非法输入拒绝
+        assert!(set_git_identity_env("", "a@b.c", &envs).is_err());
+        assert!(set_git_identity_env("x", "not-an-email", &envs).is_err());
+        assert!(set_git_identity_env("bad\nname", "a@b.c", &envs).is_err());
+        // 拒绝时不清掉已写入的值
+        let info = check_git_setup_env(&envs);
+        assert_eq!(info.user_name.as_deref(), Some("Ada Lovelace"));
     }
 }

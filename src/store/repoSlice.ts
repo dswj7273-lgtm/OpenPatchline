@@ -59,6 +59,11 @@ export const createRepoSlice: AppSlice<RepoSlice> = (set, get) => ({
         pendingRepoRefresh: null,
         remoteProgress: null,
       });
+      // 打开首个仓库 = 引导完成（v1.0 / 10.4）：关闭并记住，下次不再弹出。
+      if (get().onboardingOpen) {
+        set({ onboardingOpen: false });
+        void get().updateSettings({ onboardingDismissed: true });
+      }
       await get().reloadGraph();
       await get().loadFileStatus();
       await get().loadBranches();

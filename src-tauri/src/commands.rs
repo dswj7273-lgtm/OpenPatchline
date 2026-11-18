@@ -1404,3 +1404,25 @@ pub async fn reveal_log_file(app: tauri::AppHandle) -> AppResult<()> {
     .await
     .map_err(join_error)?
 }
+
+/// 首次启动引导（v1.0 / 10.4）：git 可用性与全局身份配置状态。
+#[tauri::command]
+pub async fn check_git_setup() -> AppResult<crate::types::GitSetupInfo> {
+    tauri::async_runtime::spawn_blocking(|| Ok(git_remote::check_git_setup()))
+        .await
+        .map_err(join_error)?
+}
+
+/// 写入全局 git 身份并返回刷新后的引导状态（v1.0 / 10.4）。
+#[tauri::command]
+pub async fn set_git_identity(
+    user_name: String,
+    user_email: String,
+) -> AppResult<crate::types::GitSetupInfo> {
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<crate::types::GitSetupInfo> {
+        git_remote::set_git_identity(&user_name, &user_email)?;
+        Ok(git_remote::check_git_setup())
+    })
+    .await
+    .map_err(join_error)?
+}

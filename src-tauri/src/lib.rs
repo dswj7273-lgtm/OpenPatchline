@@ -164,7 +164,9 @@ pub fn run() {
             commands::list_safety_backups,
             commands::restore_safety_backup,
             commands::get_diagnostics,
-            commands::reveal_log_file
+            commands::reveal_log_file,
+            commands::check_git_setup,
+            commands::set_git_identity
         ])
         // watcher 需要 AppHandle（emit 事件），在 setup 阶段注册为全局状态；
         // 同时构建原生菜单（快捷键在 macOS 菜单栏可见）并预加载应用设置。

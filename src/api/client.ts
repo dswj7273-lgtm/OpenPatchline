@@ -31,6 +31,7 @@ import type {
   RebasePlanEntry,
   RecentRepo,
   SafetyBackup,
+  GitSetupInfo,
   RepoInfo,
   ResetMode,
   StashEntry,
@@ -188,6 +189,16 @@ export function getDiagnostics(): Promise<string> {
 /** 在 Finder 中定位日志文件（v0.8 / 8.7）。 */
 export function revealLogFile(): Promise<void> {
   return invoke<void>("reveal_log_file");
+}
+
+/** 首次启动引导：git 可用性与全局身份状态（v1.0 / 10.4）。 */
+export function checkGitSetup(): Promise<GitSetupInfo> {
+  return invoke<GitSetupInfo>("check_git_setup");
+}
+
+/** 写入全局 git 身份并返回刷新后的状态（v1.0 / 10.4）。 */
+export function setGitIdentity(userName: string, userEmail: string): Promise<GitSetupInfo> {
+  return invoke<GitSetupInfo>("set_git_identity", { userName, userEmail });
 }
 
 /** 从指定提交恢复单个文件到工作区并暂存（v0.7 / 7.7）。 */

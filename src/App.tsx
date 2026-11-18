@@ -29,6 +29,7 @@ import {
   SunIcon,
 } from "./components/Icons";
 import { SettingsModal } from "./components/Settings/SettingsModal";
+import { OnboardingOverlay } from "./components/Onboarding/OnboardingOverlay";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { runAppAction } from "./keyboard/appActions";
 import { KEYBINDINGS, matchesKeybinding } from "./keyboard/keymap";
@@ -587,10 +588,14 @@ export default function App() {
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
-  // 启动时加载最近仓库（后端自动清理失效路径）、应用设置，并绑定全局未捕获错误日志。
+  // 启动时加载最近仓库（后端自动清理失效路径）、应用设置，并绑定全局未捕获错误日志；
+  // 两者就绪后判定是否弹出首次启动引导（v1.0 / 10.4）。
   useEffect(() => {
-    void useAppStore.getState().loadRecentRepos();
-    void useAppStore.getState().loadSettings();
+    void (async () => {
+      await useAppStore.getState().loadRecentRepos();
+      await useAppStore.getState().loadSettings();
+      useAppStore.getState().maybeShowOnboarding();
+    })();
     const onError = (ev: ErrorEvent) => {
       reportError("window.error", ev.error ?? ev.message);
     };
@@ -635,12 +640,13 @@ export default function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       const state = useAppStore.getState();
       if (e.key === "Escape") {
-        // 浮层（设置 / 命令面板 / Rebase / 仓库候选）各自持有捕获监听优先关闭。
+        // 浮层（设置 / 命令面板 / Rebase / 引导 / 仓库候选）各自持有捕获监听优先关闭。
         if (
           state.repoCandidates ||
           state.settingsOpen ||
           state.commandPaletteOpen ||
-          state.rebaseModalOpen
+          state.rebaseModalOpen ||
+          state.onboardingOpen
         ) {
           return;
         }
@@ -755,6 +761,7 @@ export default function App() {
         <SettingsModal />
         <CommandPalette />
         <RepoCandidateModal />
+        <OnboardingOverlay />
       </div>
     );
   }
@@ -785,6 +792,7 @@ export default function App() {
       <SettingsModal />
       <CommandPalette />
       <RepoCandidateModal />
+      <OnboardingOverlay />
     </div>
   );
 }

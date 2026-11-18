@@ -60,6 +60,7 @@ vi.mock("../api/client", async (importOriginal) => {
         ignoreWhitespaceDefault: false,
         externalEditorCommand: null,
         gitExecutablePath: null,
+        onboardingDismissed: false,
       },
       fresh: false,
     }),

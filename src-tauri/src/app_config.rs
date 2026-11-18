@@ -40,6 +40,8 @@ pub struct AppConfig {
     pub external_editor_command: Option<String>,
     /// Git 可执行文件路径覆盖；None 表示自动探测。
     pub git_executable_path: Option<String>,
+    /// 首次启动引导（v1.0 / 10.4）：用户已跳过或完成，不再自动弹出。
+    pub onboarding_dismissed: bool,
 }
 
 impl Default for AppConfig {
@@ -53,6 +55,7 @@ impl Default for AppConfig {
             ignore_whitespace_default: false,
             external_editor_command: None,
             git_executable_path: None,
+            onboarding_dismissed: false,
         }
     }
 }
@@ -84,6 +87,7 @@ impl AppConfig {
                 .git_executable_path
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
+            onboarding_dismissed: self.onboarding_dismissed,
         }
     }
 }
@@ -160,6 +164,7 @@ mod tests {
             ignore_whitespace_default: true,
             external_editor_command: Some("  ".into()),
             git_executable_path: Some("/usr/local/bin/git".into()),
+            onboarding_dismissed: false,
         };
         save_app_config(&file, &cfg.clone().normalized()).unwrap();
         let (loaded, fresh) = load_app_config(&file).unwrap();
@@ -192,5 +197,23 @@ mod tests {
         let (cfg, _) = load_app_config(&file).unwrap();
         assert_eq!(cfg.theme, "dark");
         assert_eq!(cfg.code_font_size, 12); // 缺失字段回退默认
+    }
+
+    /// v1.0 / 10.4：旧配置（无引导标记）读入后引导未完成；跳过后持久化。
+    #[test]
+    fn onboarding_flag_defaults_and_roundtrips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("settings.json");
+        std::fs::write(&file, r#"{"theme":"dark"}"#).unwrap();
+        let (cfg, _) = load_app_config(&file).unwrap();
+        assert!(!cfg.onboarding_dismissed, "旧配置应视为未完成引导");
+
+        let dismissed = AppConfig {
+            onboarding_dismissed: true,
+            ..cfg
+        };
+        save_app_config(&file, &dismissed).unwrap();
+        let (loaded, _) = load_app_config(&file).unwrap();
+        assert!(loaded.onboarding_dismissed);
     }
 }

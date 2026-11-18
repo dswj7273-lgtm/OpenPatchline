@@ -1,0 +1,146 @@
+/*
+ * 首次启动引导（v1.0 / 10.4）：git 检测 → 身份配置 → 打开第一个仓库。
+ * 与设置弹窗同风格的模态浮层；跳过或完成后写入 onboardingDismissed。
+ */
+
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 80);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgb(0 0 0 / 0.45);
+  backdrop-filter: blur(4px);
+}
+
+.onboarding-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100%);
+  max-height: min(560px, 100%);
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.onboarding-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.onboarding-header__icon {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.onboarding-title {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.onboarding-subtitle {
+  margin: 0;
+  padding: 12px 18px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.onboarding-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 18px 16px;
+}
+
+.onboarding-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.onboarding-step:last-child {
+  border-bottom: none;
+}
+
+.onboarding-step__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.onboarding-step__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.onboarding-step__state.is-ok {
+  color: var(--color-success);
+}
+
+.onboarding-step__state.is-warn {
+  color: var(--color-warning);
+}
+
+.onboarding-step__desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.onboarding-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.onboarding-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.onboarding-field__label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.onboarding-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.onboarding-skip {
+  border: none;
+  background: none;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.onboarding-skip:hover {
+  color: var(--text-primary);
+}

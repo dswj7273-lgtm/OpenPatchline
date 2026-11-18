@@ -64,6 +64,7 @@ vi.mock("../api/client", async (importOriginal) => {
         ignoreWhitespaceDefault: false,
         externalEditorCommand: null,
         gitExecutablePath: null,
+        onboardingDismissed: true,
       },
       fresh: false,
     }),
@@ -114,6 +115,7 @@ describe("App 骨架（v0.8 / 8.2）", () => {
       closeBlame: vi.fn(),
       loadRecentRepos: vi.fn(async () => {}),
       loadSettings: vi.fn(async () => {}),
+      maybeShowOnboarding: vi.fn(),
     });
   });
 

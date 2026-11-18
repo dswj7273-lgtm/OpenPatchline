@@ -65,6 +65,7 @@ describe("appearance 边界（v0.8 / 8.2）", () => {
         ignoreWhitespaceDefault: false,
         externalEditorCommand: null,
         gitExecutablePath: null,
+        onboardingDismissed: false,
       },
       "dark",
     );

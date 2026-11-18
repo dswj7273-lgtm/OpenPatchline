@@ -150,12 +150,17 @@ export interface UiSlice {
   settingsOpen: boolean;
   commandPaletteOpen: boolean;
   rebaseModalOpen: boolean;
+  /** 首次启动引导（v1.0 / 10.4）：仅在没有最近仓库且未跳过时自动弹出。 */
+  onboardingOpen: boolean;
   openSettings: () => void;
   closeSettings: () => void;
   openCommandPalette: () => void;
   closeCommandPalette: () => void;
   openRebaseModal: () => void;
   closeRebaseModal: () => void;
+  closeOnboarding: () => void;
+  /** 启动加载完成后判定是否弹出引导（无最近仓库且未跳过）。 */
+  maybeShowOnboarding: () => void;
 }
 
 export interface LogSlice {

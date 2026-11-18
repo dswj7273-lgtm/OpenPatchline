@@ -641,3 +641,15 @@ pub enum SafetyBackupKind {
     /// 把备份引用 force-with-lease 推回远端分支。
     ForcePush,
 }
+
+/// 首次启动引导（v1.0 / 10.4）：git 可用性与全局身份配置状态。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitSetupInfo {
+    /// `git --version` 输出；探测失败为 None（引导用户安装 / 配置路径）。
+    pub git_version: Option<String>,
+    /// 全局 `user.name`；未配置为 None。
+    pub user_name: Option<String>,
+    /// 全局 `user.email`；未配置为 None。
+    pub user_email: Option<String>,
+}
