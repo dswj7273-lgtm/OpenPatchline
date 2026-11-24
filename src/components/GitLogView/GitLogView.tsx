@@ -923,6 +923,7 @@ export function GitLogView() {
   return (
     <section className="gitlog" aria-label="提交历史">
       <div className="gitlog-toolbar">
+        <h1 className="gitlog-title">提交历史</h1>
         <div
           ref={omnibarRef}
           className={`gitlog-omnibar${hasAnyFilter ? " has-filter" : ""}${popoverOpen ? " is-open" : ""}`}

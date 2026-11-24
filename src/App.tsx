@@ -1,7 +1,7 @@
 /**
  * 应用根组件：三区骨架（左侧栏 + 主区域）+ 顶栏（docs/06 §1）。
  *
- * - 无仓库时展示居中的现代欢迎页与“打开仓库”入口；
+ * - 无仓库时展示仓库入口、最近记录与快捷操作；
  * - 主区域按 activeView 在 GitLogView / DiffView 间切换（docs/06 §1.2）；
  * - Escape 关闭弹层或从 diff 返回提交列表；Cmd/Ctrl+O 打开仓库，Cmd/Ctrl+Shift+T 切换主题。
  */
@@ -23,23 +23,27 @@ import {
   ChevronRightIcon,
   CloseIcon,
   FolderOpenIcon,
+  HistoryIcon,
   LogoMarkIcon,
   MoonIcon,
   SettingsIcon,
+  SplitViewIcon,
   SunIcon,
+  TerminalIcon,
 } from "./components/Icons";
 import { SettingsModal } from "./components/Settings/SettingsModal";
 import { OnboardingOverlay } from "./components/Onboarding/OnboardingOverlay";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { runAppAction } from "./keyboard/appActions";
-import { KEYBINDINGS, matchesKeybinding } from "./keyboard/keymap";
+import { formatKeybinding, KEYBINDINGS, keybinding, matchesKeybinding } from "./keyboard/keymap";
 import { useAppStore } from "./store/app";
 import type { GitProgressEvent, RepoState } from "./types";
 import { reportError } from "./utils/errors";
 
-const OPEN_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘ O" : "Ctrl O";
-const THEME_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘⇧T" : "Ctrl+Shift+T";
-const SETTINGS_SHORTCUT = navigator.userAgent.includes("Mac") ? "⌘," : "Ctrl+,";
+const OPEN_SHORTCUT = formatKeybinding(keybinding("open-repo")!);
+const PALETTE_SHORTCUT = formatKeybinding(keybinding("command-palette")!);
+const THEME_SHORTCUT = formatKeybinding(keybinding("toggle-theme")!);
+const SETTINGS_SHORTCUT = formatKeybinding(keybinding("open-settings")!);
 
 const diffViewModule = DiffViewModule as unknown as {
   DiffView?: ComponentType;
@@ -112,7 +116,13 @@ const REPO_STATE_VERB: Record<Exclude<RepoState, "clean">, string> = {
 };
 
 /** 顶栏：品牌标识 + 仓库切换器 + 分支面包屑 + 主题切换 + 设置 + 打开仓库。 */
-function TopBar() {
+function TopBar({
+  workspaceOpen = false,
+  onToggleWorkspace,
+}: {
+  workspaceOpen?: boolean;
+  onToggleWorkspace?: () => void;
+}) {
   const repo = useAppStore((s) => s.repo);
   const recentRepos = useAppStore((s) => s.recentRepos);
   const openRepo = useAppStore((s) => s.openRepo);
@@ -152,6 +162,18 @@ function TopBar() {
 
   return (
     <header className="top-bar">
+      {repo && (
+        <button
+          type="button"
+          className="icon-btn compact-workspace-toggle"
+          aria-controls="repo-workspace"
+          aria-expanded={workspaceOpen}
+          aria-label={workspaceOpen ? "收起工作区" : "展开工作区"}
+          onClick={onToggleWorkspace}
+        >
+          <SplitViewIcon />
+        </button>
+      )}
       <div className="top-bar-brand">
         <span className="top-bar-logo" aria-hidden="true">
           <LogoMarkIcon />
@@ -270,7 +292,7 @@ function TopBar() {
         >
           <SettingsIcon />
         </button>
-        <OpenRepoButton />
+        {repo && <OpenRepoButton />}
       </div>
     </header>
   );
@@ -574,6 +596,25 @@ export default function App() {
   const theme = useAppStore((s) => s.theme);
   const goBackToLog = useAppStore((s) => s.goBackToLog);
 
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+
+  // 在窄窗口中从工作区打开文件后，直接显示所选内容。
+  useEffect(() => {
+    if (!workspaceOpen) return;
+    return useAppStore.subscribe((next, previous) => {
+      if (
+        next.repo?.id !== previous.repo?.id ||
+        next.activeView !== previous.activeView ||
+        next.diffScope !== previous.diffScope ||
+        next.conflictPath !== previous.conflictPath ||
+        next.historyPath !== previous.historyPath ||
+        next.blameResult !== previous.blameResult
+      ) {
+        setWorkspaceOpen(false);
+      }
+    });
+  }, [workspaceOpen]);
+
   // 生效主题落到 <html data-theme>（驱动 theme.css 令牌覆盖）。
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -695,66 +736,92 @@ export default function App() {
         <ErrorStrip />
         <NoticeStrip />
         <main className="empty-state">
-          <div className="empty-card">
-            <div className="empty-emblem" aria-hidden="true">
-              <LogoMarkIcon />
-            </div>
-            <div className="empty-copy">
-              <h1 className="empty-title">OpenPatchline</h1>
-              <p className="empty-desc">
-                轻量、克制、以代码阅读为中心的 Git 工作台
-                <br />
-                浏览提交泳道图、审查双栏字符级差异与管理暂存区
-              </p>
-            </div>
-            <OpenRepoButton big />
-            {recentRepos.length > 0 && (
-              <div className="empty-recent">
-                <div className="empty-recent-title">最近打开的仓库</div>
-                <ul className="empty-recent-list">
-                  {recentRepos.slice(0, 6).map((item) => (
-                    <li key={item.id} className="empty-recent-row">
-                      <button
-                        type="button"
-                        className="empty-recent-item"
-                        onClick={() => void openRepo(item.path)}
-                      >
-                        <FolderOpenIcon className="empty-recent-icon" />
-                        <span className="empty-recent-copy">
-                          <span className="empty-recent-name">{item.name}</span>
-                          <span className="empty-recent-path" title={item.path}>
-                            {item.path}
-                          </span>
-                        </span>
-                        <ChevronRightIcon className="empty-recent-chevron" />
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-btn empty-recent-remove"
-                        aria-label={`移除最近仓库 ${item.name}`}
-                        title="从最近列表移除"
-                        onClick={() => void removeRecentRepo(item.path)}
-                      >
-                        <CloseIcon />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+          <div className="welcome-workspace">
+            <section className="welcome-hero" aria-labelledby="welcome-title">
+              <div className="welcome-intro">
+                <h1 id="welcome-title">仓库工作台</h1>
+                <p>打开本地 Git 仓库，浏览提交历史、审查差异并管理更改。</p>
+                <OpenRepoButton big />
               </div>
-            )}
-            <div className="empty-features" aria-hidden="true">
-              <span className="empty-feature-pill">
-                <span className="empty-feature-dot" />
-                泳道提交图
-              </span>
-              <span className="empty-feature-pill">
-                <span className="empty-feature-dot" />
-                双栏字符级 Diff
-              </span>
-              <span className="empty-feature-pill">
-                <span className="empty-feature-dot" />
-                实时工作区监听
-              </span>
+              <div className="patch-art" aria-hidden="true">
+                <div className="patch-sheet patch-sheet-base" />
+                <div className="patch-sheet patch-sheet-middle" />
+                <div className="patch-sheet patch-sheet-top">
+                  <div className="patch-sheet-bar">
+                    <LogoMarkIcon />
+                    <i />
+                  </div>
+                  <div className="patch-diagram">
+                    <span className="patch-lane" />
+                    <span className="patch-fork" />
+                    <i />
+                    <i />
+                    <i />
+                    <i />
+                  </div>
+                </div>
+              </div>
+            </section>
+            <div className="welcome-sections">
+              <section className="welcome-panel" aria-labelledby="welcome-recent">
+                <h2 id="welcome-recent">
+                  <HistoryIcon />
+                  最近打开的仓库
+                </h2>
+                {recentRepos.length > 0 ? (
+                  <ul className="empty-recent-list">
+                    {recentRepos.slice(0, 6).map((item) => (
+                      <li key={item.id} className="empty-recent-row">
+                        <button
+                          type="button"
+                          className="empty-recent-item"
+                          onClick={() => void openRepo(item.path)}
+                        >
+                          <FolderOpenIcon className="empty-recent-icon" />
+                          <span className="empty-recent-copy">
+                            <span className="empty-recent-name">{item.name}</span>
+                            <span className="empty-recent-path" title={item.path}>
+                              {item.path}
+                            </span>
+                          </span>
+                          <ChevronRightIcon className="empty-recent-chevron" />
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-btn empty-recent-remove"
+                          aria-label={`移除最近仓库 ${item.name}`}
+                          title="从最近列表移除"
+                          onClick={() => void removeRecentRepo(item.path)}
+                        >
+                          <CloseIcon />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="welcome-no-repos">
+                    <FolderOpenIcon />
+                    <div>
+                      <strong>暂无最近仓库</strong>
+                      <p>打开过的仓库会出现在这里。</p>
+                    </div>
+                  </div>
+                )}
+              </section>
+              <section className="welcome-panel" aria-labelledby="welcome-actions">
+                <h2 id="welcome-actions">
+                  <TerminalIcon />
+                  快捷操作
+                </h2>
+                <div className="welcome-actions">
+                  <button type="button" onClick={() => runAppAction("command-palette")}>
+                    命令面板 <kbd>{PALETTE_SHORTCUT}</kbd>
+                  </button>
+                  <button type="button" onClick={() => runAppAction("open-settings")}>
+                    应用设置 <kbd>{SETTINGS_SHORTCUT}</kbd>
+                  </button>
+                </div>
+              </section>
             </div>
           </div>
         </main>
@@ -768,12 +835,12 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <TopBar />
+      <TopBar workspaceOpen={workspaceOpen} onToggleWorkspace={() => setWorkspaceOpen((v) => !v)} />
       <ConflictBanner />
       <RemoteProgressStrip />
       <ErrorStrip />
       <NoticeStrip />
-      <div className="app-body">
+      <div className={`app-body${workspaceOpen ? " workspace-expanded" : ""}`}>
         <Sidebar />
         <main className="app-main">
           {activeView === "diff" ? (

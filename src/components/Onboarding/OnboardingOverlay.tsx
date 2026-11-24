@@ -16,7 +16,7 @@ import { AlertIcon, CheckIcon, FolderOpenIcon, LogoMarkIcon } from "../Icons";
 import "./OnboardingOverlay.css";
 
 export function OnboardingOverlay() {
-  const open = useAppStore((s) => s.onboardingOpen);
+  const open = useAppStore((s) => s.onboardingOpen && !s.settingsOpen);
   const closeOnboarding = useAppStore((s) => s.closeOnboarding);
   const openRepo = useAppStore((s) => s.openRepo);
   const openSettings = useAppStore((s) => s.openSettings);
@@ -107,13 +107,15 @@ export function OnboardingOverlay() {
           <span className="onboarding-header__icon">
             <LogoMarkIcon />
           </span>
-          <h2 className="onboarding-title">欢迎使用 OpenPatchline</h2>
+          <div>
+            <h2 className="onboarding-title">欢迎使用 OpenPatchline</h2>
+            <p className="onboarding-subtitle">检查本机 Git 环境，设置提交时使用的署名。</p>
+          </div>
         </header>
-        <p className="onboarding-subtitle">三步完成初始配置，随时可以跳过。</p>
         <div className="onboarding-body">
           <section className="onboarding-step" aria-label="检测 git">
             <div className="onboarding-step__head">
-              ① 检测 git
+              Git 环境
               {info === null ? null : gitReady ? (
                 <span className="onboarding-step__state is-ok">
                   <CheckIcon /> 已检测到
@@ -142,19 +144,17 @@ export function OnboardingOverlay() {
 
           <section className="onboarding-step" aria-label="配置提交身份">
             <div className="onboarding-step__head">
-              ② 提交身份（user.name / user.email）
+              提交身份
               {info !== null && identityReady && (
                 <span className="onboarding-step__state is-ok">
                   <CheckIcon /> 已配置
                 </span>
               )}
             </div>
-            <p className="onboarding-step__desc">
-              写入全局 gitconfig，提交记录以此署名；已配置过也可以在这里修改。
-            </p>
+            <p className="onboarding-step__desc">保存后会更新全局 Git 用户名和邮箱。</p>
             <div className="onboarding-fields">
               <label className="onboarding-field">
-                <span className="onboarding-field__label">user.name</span>
+                <span className="onboarding-field__label">用户名</span>
                 <input
                   className="input"
                   aria-label="git 用户名"
@@ -164,9 +164,10 @@ export function OnboardingOverlay() {
                 />
               </label>
               <label className="onboarding-field">
-                <span className="onboarding-field__label">user.email</span>
+                <span className="onboarding-field__label">邮箱</span>
                 <input
                   className="input"
+                  type="email"
                   aria-label="git 邮箱"
                   value={email}
                   placeholder="you@example.com"
@@ -184,11 +185,6 @@ export function OnboardingOverlay() {
                 </button>
               </div>
             </div>
-          </section>
-
-          <section className="onboarding-step" aria-label="打开仓库">
-            <div className="onboarding-step__head">③ 打开第一个仓库</div>
-            <p className="onboarding-step__desc">选择本地仓库目录开始浏览提交历史与变更。</p>
           </section>
         </div>
         <footer className="onboarding-footer">

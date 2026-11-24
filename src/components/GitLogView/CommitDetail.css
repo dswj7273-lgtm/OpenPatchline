@@ -285,6 +285,88 @@
   gap: 2px;
 }
 
+.cd-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cd-tree-node {
+  min-width: 0;
+}
+
+.cd-dir {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 24px;
+  padding: 1px 4px 1px 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cd-dir:hover {
+  background: var(--surface-2);
+}
+
+.cd-caret {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.cd-caret.is-open {
+  transform: rotate(90deg);
+}
+
+.cd-dir-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: color-mix(in oklch, var(--color-success) 72%, var(--text-secondary));
+}
+
+.cd-dir-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cd-dir-count {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cd-dir-loc {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  opacity: 0.72;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cd-file-row {
   display: flex;
   align-items: center;
@@ -304,7 +386,7 @@
   flex: 1;
   min-width: 0;
   min-height: 28px;
-  padding: 3px 6px;
+  padding: 2px 2px 2px 0;
   border: none;
   border-radius: 6px;
   background: transparent;
@@ -377,21 +459,13 @@
   font-size: 12px;
 }
 
-.cd-file-dir {
-  flex: 0 1 auto;
-  min-width: 0;
-  color: var(--text-muted);
-  direction: rtl;
-  unicode-bidi: plaintext;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .cd-file-base {
-  flex: none;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-weight: 500;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

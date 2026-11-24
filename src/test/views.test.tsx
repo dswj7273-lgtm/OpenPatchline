@@ -243,8 +243,11 @@ describe("CommitDetail（v0.8 / 8.2）", () => {
     render(<CommitDetail />);
     expect(screen.getByText("feat: subject line")).toBeInTheDocument();
 
-    // 文件行与统计
+    // 按目录分组：仓库根 + 压缩后的目录，文件只显示文件名
+    expect(screen.getByRole("button", { name: "折叠 repo，2 个文件" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "折叠 src，2 个文件" })).toBeInTheDocument();
     expect(screen.getByTitle(/src\/a\.ts/)).toBeInTheDocument();
+    expect(screen.getByText("a.ts")).toBeInTheDocument();
     expect(screen.getByText("+13")).toBeInTheDocument(); // 总计
 
     // 父提交芯片（无父提交不展示）与所在分支异步加载
@@ -266,6 +269,16 @@ describe("CommitDetail（v0.8 / 8.2）", () => {
     const restoreBtn = screen.getByLabelText("从该提交恢复 src/a.ts");
     fireEvent.click(restoreBtn);
     expect(restore).toHaveBeenCalledWith("1111111", "src/a.ts");
+  });
+
+  it("collapses a directory group and hides its files", () => {
+    render(<CommitDetail />);
+    fireEvent.click(screen.getByRole("button", { name: "折叠 src，2 个文件" }));
+    expect(screen.queryByTitle(/src\/a\.ts/)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/src\/b\.ts/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "展开 src，2 个文件" }));
+    expect(screen.getByTitle(/src\/a\.ts/)).toBeInTheDocument();
   });
 });
 

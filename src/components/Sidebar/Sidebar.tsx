@@ -946,6 +946,7 @@ export function Sidebar() {
     <aside
       className={`sidebar${resizing ? " is-resizing" : ""}`}
       style={{ width }}
+      id="repo-workspace"
       aria-label="仓库侧栏"
     >
       <div className="sidebar-section sidebar-workspace">

@@ -1,16 +1,19 @@
 /**
  * 提交详情与范围对比面板（docs/06 §8.5）：
- * - 单提交模式：元信息、GPG/SSH 签名状态、快捷操作、变更文件列表；
- * - 范围对比模式（4.3）：基线 → 目标方向互换、差异文件列表（点击进入 Range Diff）。
+ * - 单提交模式：元信息、GPG/SSH 签名状态、快捷操作、按目录分组的变更文件；
+ * - 范围对比模式（4.3）：基线 → 目标方向互换、差异文件目录树（点击进入 Range Diff）。
  */
 import { useEffect, useMemo, useState } from "react";
 import {
   BranchIcon,
   CheckIcon,
+  ChevronRightIcon,
   CherryPickIcon,
   CloseIcon,
   CompareIcon,
   CopyIcon,
+  FolderIcon,
+  FolderOpenIcon,
   HistoryIcon,
   RebaseIcon,
   ShieldCheckIcon,
@@ -20,6 +23,7 @@ import {
 import * as api from "../../api/client";
 import { useAppStore } from "../../store/app";
 import { copyText } from "../../utils/clipboard";
+import { buildCompactFileTree, type CompactFileDir } from "../../utils/fileTree";
 import type { ChangedFile, ChangeType, CommitSignatureInfo, SignatureStatus } from "../../types";
 import { formatAbsolute } from "./CommitTable";
 import "./CommitDetail.css";
@@ -44,13 +48,6 @@ const SIGNATURE_LABELS: Record<SignatureStatus, { label: string; tone: string }>
   unsigned: { label: "未签名", tone: "muted" },
 };
 
-/** 拆出目录与文件名（目录部分在 UI 中做“截头”省略）。 */
-function splitPath(path: string): { dir: string; base: string } {
-  const idx = path.lastIndexOf("/");
-  if (idx < 0) return { dir: "", base: path };
-  return { dir: path.slice(0, idx + 1), base: path.slice(idx + 1) };
-}
-
 /** 根据作者姓名生成 1–2 位缩写与稳定色相。 */
 function authorBadge(name: string): { initials: string; hue: number } {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -64,6 +61,9 @@ function authorBadge(name: string): { initials: string; hue: number } {
   return { initials, hue };
 }
 
+/** 一级缩进（箭头 12px + 间距 4px），使文件徽章与文件夹图标对齐。 */
+const TREE_INDENT = 16;
+
 function summarizeFiles(files: ChangedFile[]): { add: number; del: number } {
   let add = 0;
   let del = 0;
@@ -76,21 +76,24 @@ function summarizeFiles(files: ChangedFile[]): { add: number; del: number } {
 
 function CommitFileRow({
   file,
+  name,
+  depth,
   onClick,
   onBlame,
   onRestore,
 }: {
   file: ChangedFile;
+  name: string;
+  depth: number;
   onClick: () => void;
   onBlame?: () => void;
   /** 从该提交恢复此文件到工作区（v0.7 / 7.7）。 */
   onRestore?: () => void;
 }) {
-  const { dir, base } = splitPath(file.path);
   const canBlame =
     file.changeType !== "deleted" && file.changeType !== "binary" && Boolean(onBlame);
   return (
-    <div className="cd-file-row">
+    <div className="cd-file-row" style={{ paddingLeft: depth * TREE_INDENT }}>
       <button type="button" className={`cd-file cd-file--${file.changeType}`} onClick={onClick}>
         <span className={`cd-file-badge badge-${file.changeType}`}>
           {CHANGE_LETTER[file.changeType]}
@@ -99,8 +102,7 @@ function CommitFileRow({
           className="cd-file-path"
           title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
         >
-          {dir && <span className="cd-file-dir">{dir}</span>}
-          <span className="cd-file-base">{base}</span>
+          <span className="cd-file-base">{name}</span>
         </span>
         <span className="cd-file-stats">
           {file.additions > 0 && <span className="cd-add">+{file.additions}</span>}
@@ -133,20 +135,108 @@ function CommitFileRow({
   );
 }
 
+function FileTreeBranch({
+  node,
+  depth,
+  collapsed,
+  onToggle,
+  onOpenFile,
+  onBlameFile,
+  onRestoreFile,
+}: {
+  node: CompactFileDir<ChangedFile>;
+  depth: number;
+  collapsed: ReadonlySet<string>;
+  onToggle: (id: string) => void;
+  onOpenFile: (index: number) => void;
+  onBlameFile?: (file: ChangedFile) => void;
+  onRestoreFile?: (file: ChangedFile) => void;
+}) {
+  const open = !collapsed.has(node.id);
+  const countLabel = `${node.fileCount} 个文件`;
+  const locationTitle = node.path ? `${node.path}/` : node.label;
+  return (
+    <li className="cd-tree-node">
+      <button
+        type="button"
+        className="cd-dir"
+        style={{ paddingLeft: depth * TREE_INDENT }}
+        aria-expanded={open}
+        aria-label={`${open ? "折叠" : "展开"} ${node.label}，${countLabel}`}
+        title={`${locationTitle}（${countLabel}）`}
+        onClick={() => onToggle(node.id)}
+      >
+        <ChevronRightIcon className={`cd-caret${open ? " is-open" : ""}`} />
+        {open ? <FolderOpenIcon className="cd-dir-icon" /> : <FolderIcon className="cd-dir-icon" />}
+        <span className="cd-dir-label">{node.label}</span>
+        <span className="cd-dir-count">{countLabel}</span>
+        {node.location && <span className="cd-dir-loc">{node.location}</span>}
+      </button>
+      {open && (node.dirs.length > 0 || node.files.length > 0) && (
+        <ul className="cd-tree">
+          {node.dirs.map((dir) => (
+            <FileTreeBranch
+              key={dir.id}
+              node={dir}
+              depth={depth + 1}
+              collapsed={collapsed}
+              onToggle={onToggle}
+              onOpenFile={onOpenFile}
+              onBlameFile={onBlameFile}
+              onRestoreFile={onRestoreFile}
+            />
+          ))}
+          {node.files.map((leaf) => (
+            <li key={`${leaf.file.path}:${leaf.index}`} className="cd-tree-node">
+              <CommitFileRow
+                file={leaf.file}
+                name={leaf.name}
+                depth={depth + 1}
+                onClick={() => onOpenFile(leaf.index)}
+                onBlame={onBlameFile ? () => onBlameFile(leaf.file) : undefined}
+                onRestore={onRestoreFile ? () => onRestoreFile(leaf.file) : undefined}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 function DiffFileListSection({
   title,
   files,
+  rootLabel,
   onOpenFile,
   onBlameFile,
   onRestoreFile,
 }: {
   title: string;
   files: ChangedFile[];
+  /** 目录树根节点名，通常是仓库名。 */
+  rootLabel: string;
   onOpenFile: (index: number) => void;
   onBlameFile?: (file: ChangedFile) => void;
   onRestoreFile?: (file: ChangedFile) => void;
 }) {
   const totals = useMemo(() => summarizeFiles(files), [files]);
+  const tree = useMemo(() => buildCompactFileTree(files, rootLabel), [files, rootLabel]);
+  const treeKey = useMemo(() => files.map((file) => file.path).join("\n"), [files]);
+  const [collapsedState, setCollapsedState] = useState<{ key: string; paths: ReadonlySet<string> }>(
+    { key: treeKey, paths: new Set() },
+  );
+  const collapsed = collapsedState.key === treeKey ? collapsedState.paths : new Set<string>();
+
+  const toggleDir = (id: string) => {
+    setCollapsedState((prev) => {
+      const paths = new Set(prev.key === treeKey ? prev.paths : []);
+      if (paths.has(id)) paths.delete(id);
+      else paths.add(id);
+      return { key: treeKey, paths };
+    });
+  };
+
   return (
     <div className="cd-files">
       <div className="cd-files-header">
@@ -164,15 +254,17 @@ function DiffFileListSection({
         {files.length === 0 ? (
           <p className="cd-placeholder">没有检测到文件差异</p>
         ) : (
-          files.map((file, i) => (
-            <CommitFileRow
-              key={`${file.path}:${i}`}
-              file={file}
-              onClick={() => onOpenFile(i)}
-              onBlame={onBlameFile ? () => onBlameFile(file) : undefined}
-              onRestore={onRestoreFile ? () => onRestoreFile(file) : undefined}
+          <ul className="cd-tree" aria-label={title}>
+            <FileTreeBranch
+              node={tree}
+              depth={0}
+              collapsed={collapsed}
+              onToggle={toggleDir}
+              onOpenFile={onOpenFile}
+              onBlameFile={onBlameFile}
+              onRestoreFile={onRestoreFile}
             />
-          ))
+          </ul>
         )}
       </div>
     </div>
@@ -300,6 +392,7 @@ export function CommitDetail({ onOpenRebase }: { onOpenRebase?: () => void }) {
         <DiffFileListSection
           title="差异文件"
           files={rangeFiles}
+          rootLabel={repo?.name ?? "仓库"}
           onOpenFile={(i) =>
             void openFileDiff(
               {
@@ -547,6 +640,7 @@ export function CommitDetail({ onOpenRebase }: { onOpenRebase?: () => void }) {
       <DiffFileListSection
         title="变更文件"
         files={commitFiles}
+        rootLabel={repo?.name ?? "仓库"}
         onOpenFile={(i) => void openFileDiff({ kind: "commit", commitId: c.id }, commitFiles, i)}
         onBlameFile={(file) => void openFileBlame(file.path, c.id, { returnView: "log" })}
         onRestoreFile={(file) => void restoreFileFromCommit(c.id, file.path)}

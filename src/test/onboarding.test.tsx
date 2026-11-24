@@ -33,12 +33,10 @@ afterEach(() => {
 });
 
 describe("OnboardingOverlay（v1.0 / 10.4）", () => {
-  let openRepo: ReturnType<typeof vi.fn>;
-  let updateSettings: ReturnType<typeof vi.fn>;
+  const openRepo = vi.fn(async () => {});
+  const updateSettings = vi.fn(async () => {});
 
   beforeEach(() => {
-    openRepo = vi.fn(async () => {});
-    updateSettings = vi.fn(async () => {});
     useAppStore.setState({
       onboardingOpen: true,
       openRepo,
@@ -47,7 +45,7 @@ describe("OnboardingOverlay（v1.0 / 10.4）", () => {
     });
   });
 
-  it("renders three steps with git detected and empty identity inputs", async () => {
+  it("shows the detected Git version and empty identity inputs", async () => {
     render(<OnboardingOverlay />);
     expect(screen.getByText("欢迎使用 OpenPatchline")).toBeInTheDocument();
     await waitFor(() => {
